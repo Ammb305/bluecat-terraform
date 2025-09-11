@@ -1,0 +1,47 @@
+# Terraform files
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+*.tfstate
+.terraformrc
+terraform.rc
+
+# Module temporary files
+.terraform_token
+.terraform_record_id
+.terraform_operation_status
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Test files
+examples/test.tfvars
+examples/terraform.tfvars
+examples/*.tfstate*
+examples/.terraform/

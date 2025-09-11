@@ -1,0 +1,6 @@
+# Example terraform.tfvars file
+# Copy this to terraform.tfvars and fill in your actual values
+
+api_url  = "https://your-bluecat-server.example.com"
+username = "your-username"
+password = "your-password"
