@@ -23,16 +23,18 @@ resource "null_resource" "dns_record_management" {
     record_name  = var.record_name
     record_value = var.record_value
     ttl          = var.ttl
+    api_version  = var.api_version
+    api_path     = var.api_path
   }
 
   provisioner "local-exec" {
-    command     = "${path.module}/manage_record.sh '${var.api_url}' '${var.username}' '${var.password}' '${var.zone}' '${var.record_type}' '${var.record_name}' '${var.record_value}' '${var.ttl}' '${path.module}' '${var.api_version}' '${var.api_path}'"
+    command     = "${path.module}/manage_record.sh '${self.triggers.api_url}' '${self.triggers.username}' '${self.triggers.password}' '${self.triggers.zone}' '${self.triggers.record_type}' '${self.triggers.record_name}' '${self.triggers.record_value}' '${self.triggers.ttl}' '${path.module}' '${self.triggers.api_version}' '${self.triggers.api_path}'"
     interpreter = ["bash", "-c"]
   }
 
   provisioner "local-exec" {
     when        = destroy
-    command     = "${path.module}/delete_record.sh '${path.module}' '${self.triggers.api_url}' '${self.triggers.zone}' '${var.api_version}' '${var.api_path}'"
+    command     = "${path.module}/delete_record.sh '${self.triggers.api_url}' '${self.triggers.username}' '${self.triggers.password}' '${self.triggers.zone}' '${self.triggers.record_type}' '${self.triggers.record_name}' '${path.module}' '${self.triggers.api_version}' '${self.triggers.api_path}'"
     interpreter = ["bash", "-c"]
   }
 }
