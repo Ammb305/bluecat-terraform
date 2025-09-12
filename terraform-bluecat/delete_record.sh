@@ -6,6 +6,8 @@ set -e
 MODULE_PATH="$1"
 API_URL="$2"
 ZONE="$3"
+API_VERSION="${4:-v1}"
+API_PATH="${5}"
 
 # Check if files exist
 if [ ! -f "$MODULE_PATH/.terraform_token" ] || [ ! -f "$MODULE_PATH/.terraform_record_id" ]; then
@@ -17,7 +19,14 @@ fi
 token=$(cat "$MODULE_PATH/.terraform_token")
 record_id=$(cat "$MODULE_PATH/.terraform_record_id")
 
-BASE_API="$API_URL/Services/REST/v1"
+# Determine the correct API base path
+if [ -n "$API_PATH" ]; then
+    # Use custom API path (e.g., "/api/v2")
+    BASE_API="$API_URL$API_PATH"
+else
+    # Use standard BlueCat path with version
+    BASE_API="$API_URL/Services/REST/$API_VERSION"
+fi
 echo "Deleting record ID: $record_id"
 
 # Function to make API calls  

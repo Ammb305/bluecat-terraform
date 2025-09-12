@@ -111,6 +111,39 @@ module "txt_record" {
 | record_value | Value of the DNS record | `string` | n/a | yes |
 | ttl | Time to live for the DNS record in seconds | `number` | `3600` | no |
 | timeout | Timeout for API requests in seconds | `number` | `30` | no |
+| api_version | BlueCat API version (v1 or v2) | `string` | `"v1"` | no |
+| api_path | Custom API path (overrides version-based path) | `string` | `""` | no |
+
+## API Version Support
+
+The module supports both v1 and v2 APIs with flexible endpoint configuration:
+
+### Standard BlueCat API Endpoints:
+- **v1**: `https://your-server/Services/REST/v1` (default)
+- **v2**: `https://your-server/Services/REST/v2`
+
+### Custom API Endpoints:
+- **Custom path**: `https://your-server/api/v2` (use `api_path = "/api/v2"`)
+- **Sessions endpoint**: Automatically uses `/sessions` for custom v2 paths
+
+### URL Structure Examples:
+```hcl
+# Standard v1 (default)
+api_url = "https://bluecat.company.com"
+api_version = "v1"  # Optional, this is the default
+# Results in: https://bluecat.company.com/Services/REST/v1
+
+# Standard v2  
+api_url = "https://bluecat.company.com"
+api_version = "v2"
+# Results in: https://bluecat.company.com/Services/REST/v2
+
+# Custom API path (like your team's setup)
+api_url = "https://xyz"
+api_path = "/api/v2"
+# Results in: https://xyz/api/v2
+# Authentication: https://xyz/api/v2/sessions
+```
 
 ## Outputs
 

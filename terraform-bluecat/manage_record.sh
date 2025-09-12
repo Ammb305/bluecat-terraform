@@ -13,9 +13,19 @@ RECORD_NAME="$6"
 RECORD_VALUE="$7"
 TTL="$8"
 MODULE_PATH="$9"
+API_VERSION="${10:-v1}"
+API_PATH="${11}"
 
 FQDN="$RECORD_NAME.$ZONE"
-BASE_API="$API_URL/Services/REST/v1"
+
+# Determine the correct API base path
+if [ -n "$API_PATH" ]; then
+    # Use custom API path (e.g., "/api/v2")
+    BASE_API="$API_URL$API_PATH"
+else
+    # Use standard BlueCat path with version
+    BASE_API="$API_URL/Services/REST/$API_VERSION"
+fi
 
 echo "Managing DNS record: $FQDN ($RECORD_TYPE)"
 
@@ -55,7 +65,17 @@ api_call() {
 # Authentication
 echo "Authenticating..."
 auth_header="Basic $(echo -n "$USERNAME:$PASSWORD" | base64)"
-auth_response=$(api_call "GET" "login" "$auth_header")
+
+# Determine login endpoint based on API path
+if [[ "$BASE_API" == *"/api/v2"* ]]; then
+    # Use sessions endpoint for v2 API with /api/v2 path
+    login_endpoint="sessions"
+else
+    # Use standard login endpoint
+    login_endpoint="login"
+fi
+
+auth_response=$(api_call "GET" "$login_endpoint" "$auth_header")
 
 auth_code="${auth_response%%|*}"
 auth_body="${auth_response#*|}"

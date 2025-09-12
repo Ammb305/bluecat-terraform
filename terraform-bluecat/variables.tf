@@ -21,6 +21,22 @@ variable "password" {
   sensitive   = true
 }
 
+variable "api_version" {
+  description = "BlueCat API version (v1 or v2)"
+  type        = string
+  default     = "v1"
+  validation {
+    condition     = contains(["v1", "v2"], var.api_version)
+    error_message = "API version must be either 'v1' or 'v2'."
+  }
+}
+
+variable "api_path" {
+  description = "Custom API path (overrides default version-based path). Use for custom endpoints like '/api/v2'"
+  type        = string
+  default     = ""
+}
+
 variable "zone" {
   description = "Domain zone for DNS records (e.g., example.com)"
   type        = string

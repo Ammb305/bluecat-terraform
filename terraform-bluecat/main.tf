@@ -26,12 +26,12 @@ resource "null_resource" "dns_record_management" {
   }
 
   provisioner "local-exec" {
-    command = "${path.module}/manage_record.sh '${var.api_url}' '${var.username}' '${var.password}' '${var.zone}' '${var.record_type}' '${var.record_name}' '${var.record_value}' '${var.ttl}' '${path.module}'"
+    command = "${path.module}/manage_record.sh '${var.api_url}' '${var.username}' '${var.password}' '${var.zone}' '${var.record_type}' '${var.record_name}' '${var.record_value}' '${var.ttl}' '${path.module}' '${var.api_version}' '${var.api_path}'"
   }
 
   provisioner "local-exec" {
     when = destroy
-    command = "${path.module}/delete_record.sh '${path.module}' '${self.triggers.api_url}' '${self.triggers.zone}'"
+    command = "${path.module}/delete_record.sh '${path.module}' '${self.triggers.api_url}' '${self.triggers.zone}' '${var.api_version}' '${var.api_path}'"
   }
 }
 
