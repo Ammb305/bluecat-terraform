@@ -12,9 +12,17 @@ terraform {
   }
 }
 
-# DNS Record Management using external scripts
+# IMPORTANT: TERRAFORM STATE NOTE
+# This resource uses a `triggers` map to pass variables to the `destroy`
+# provisioner. If you add or change variables in this map, you MUST run `terraform apply`
+# one time to update the resource in the Terraform state.
+#
+# If you see a "Missing map element" error during `terraform destroy`, it means
+# the state file is out of sync. Running `terraform apply` will fix this by
+# updating the state with the new trigger values.
 resource "null_resource" "dns_record_management" {
   triggers = {
+    # All variables needed for create and destroy must be listed here.
     api_url      = var.api_url
     username     = var.username
     password     = var.password
@@ -28,11 +36,13 @@ resource "null_resource" "dns_record_management" {
   }
 
   provisioner "local-exec" {
+    # Create/Update provisioner
     command     = "${path.module}/manage_record.sh '${self.triggers.api_url}' '${self.triggers.username}' '${self.triggers.password}' '${self.triggers.zone}' '${self.triggers.record_type}' '${self.triggers.record_name}' '${self.triggers.record_value}' '${self.triggers.ttl}' '${path.module}' '${self.triggers.api_version}' '${self.triggers.api_path}'"
     interpreter = ["bash", "-c"]
   }
 
   provisioner "local-exec" {
+    # Destroy provisioner
     when        = destroy
     command     = "${path.module}/delete_record.sh '${self.triggers.api_url}' '${self.triggers.username}' '${self.triggers.password}' '${self.triggers.zone}' '${self.triggers.record_type}' '${self.triggers.record_name}' '${path.module}' '${self.triggers.api_version}' '${self.triggers.api_path}'"
     interpreter = ["bash", "-c"]
