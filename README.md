@@ -111,34 +111,37 @@ module "txt_record" {
 | record_value | Value of the DNS record | `string` | n/a | yes |
 | ttl | Time to live for the DNS record in seconds | `number` | `3600` | no |
 | timeout | Timeout for API requests in seconds | `number` | `30` | no |
-| api_version | BlueCat API version (v1 or v2) | `string` | `"v1"` | no |
-| api_path | Custom API path (overrides version-based path) | `string` | `""` | no |
+| api_version | BlueCat API version (v1 or v2) | `string` | `"v2"` | no |
+| api_path | Custom API path (overrides version-based path) | `string` | `"/api/v2"` | no |
 
 ## API Version Support
 
 The module supports both v1 and v2 APIs with flexible endpoint configuration:
 
 ### Standard BlueCat API Endpoints:
-- **v1**: `https://your-server/Services/REST/v1` (default)
-- **v2**: `https://your-server/Services/REST/v2`
+- **v1**: `https://your-server/Services/REST/v1`
+- **v2**: `https://your-server/Services/REST/v2` (default)
 
 ### Custom API Endpoints:
-- **Custom path**: `https://your-server/api/v2` (use `api_path = "/api/v2"`)
-- **Sessions endpoint**: Automatically uses `/sessions` for custom v2 paths
+- **Custom path**: `https://your-server/api/v2` (default configuration)
+- **Sessions endpoint**: Automatically uses `/sessions` for v2 authentication
 
 ### URL Structure Examples:
 ```hcl
-# Standard v1 (default)
+# Standard v2 (default)
 api_url = "https://bluecat.company.com"
-api_version = "v1"  # Optional, this is the default
+api_version = "v2"  # Optional, this is the default
+api_path = "/api/v2"  # Optional, this is the default
+# Results in: https://bluecat.company.com/api/v2
+# Authentication: https://bluecat.company.com/api/v2/sessions
+
+# Standard v1 (legacy)
+api_url = "https://bluecat.company.com"
+api_version = "v1"
+api_path = ""
 # Results in: https://bluecat.company.com/Services/REST/v1
 
-# Standard v2  
-api_url = "https://bluecat.company.com"
-api_version = "v2"
-# Results in: https://bluecat.company.com/Services/REST/v2
-
-# Custom API path (like your team's setup)
+# Custom API path
 api_url = "https://xyz"
 api_path = "/api/v2"
 # Results in: https://xyz/api/v2
@@ -173,7 +176,7 @@ pip install -r requirements.txt
 python server.py
 ```
 
-The server will run on `http://localhost:5000` and accept any username/password combination.
+The server will run on `http://localhost:5001` and accept any username/password combination.
 
 ### Running Tests
 
@@ -195,6 +198,17 @@ terraform output test_results
 
 The mock server provides the following endpoints for testing:
 
+**v2 API Endpoints (default):**
+- `POST /api/v2/sessions` - Authentication
+- `GET /api/v2/logout` - Session cleanup
+- `GET /api/v2/getZonesByHint` - Zone lookup
+- `GET /api/v2/zones/{id}/entities` - Get zone entities
+- `POST /api/v2/zones/{id}/entities` - Create records
+- `PUT /api/v2/entities/{id}` - Update records
+- `DELETE /api/v2/entities/{id}` - Delete records
+- `POST /api/v2/quickDeploy` - Deploy changes
+
+**v1 API Endpoints (legacy):**
 - `GET /Services/REST/v1/login` - Authentication
 - `GET /Services/REST/v1/logout` - Session cleanup
 - `GET /Services/REST/v1/getZonesByHint` - Zone lookup
@@ -203,8 +217,10 @@ The mock server provides the following endpoints for testing:
 - `PUT /Services/REST/v1/update` - Update records
 - `DELETE /Services/REST/v1/delete` - Delete records
 - `POST /Services/REST/v1/quickDeploy` - Deploy changes
-- `GET /health` - Health check (debug)
-- `GET /debug/records` - View all records (debug)
+
+**Debug Endpoints:**
+- `GET /health` - Health check
+- `GET /debug/records` - View all records
 
 ## Implementation Details
 
@@ -267,8 +283,8 @@ terraform apply
 
 2. Check mock server debug endpoints:
 ```bash
-curl http://localhost:5000/health
-curl http://localhost:5000/debug/records
+curl http://localhost:5001/health
+curl http://localhost:5001/debug/records
 ```
 
 ## Security Considerations

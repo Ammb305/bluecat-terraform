@@ -22,6 +22,17 @@ bluecat-terraform/
     └── requirements.txt              # Python dependencies
 ```
 
+## 🚀 **UPDATED: BlueCat REST API v2 Migration Complete**
+
+**The module has been fully migrated to use BlueCat REST API v2 by default, with full backward compatibility for v1.**
+
+### Key v2 Updates:
+- ✅ **Authentication**: Now uses `POST /api/v2/sessions` by default
+- ✅ **All Endpoints**: Migrated to v2 entity-based operations (`/api/v2/zones/{id}/entities`)
+- ✅ **CNAME Records**: Uses v2 `linkedRecordName` property format
+- ✅ **Tested & Working**: Both CNAME and A records fully tested with v2 API
+- ✅ **Backward Compatible**: v1 support maintained for legacy systems
+
 ## ✅ Delivered Features
 
 ### 1. **Complete CRUD Operations**

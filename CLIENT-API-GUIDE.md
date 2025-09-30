@@ -22,11 +22,11 @@ https://your-bluecat-server.domain.com
 
 ### 2. API Version Support (v1 vs v2)
 
-✅ **Yes, the module fully supports v2!** We've updated it to handle both versions.
+✅ **Yes, the module is now v2 by default!** We've fully migrated to v2 with v1 legacy support.
 
 #### Standard BlueCat API Paths:
-- **v1**: `/Services/REST/v1/` (our current default)
-- **v2**: `/Services/REST/v2/` (fully supported now)
+- **v2**: `/api/v2/` (current default)
+- **v1**: `/Services/REST/v1/` (legacy support)
 
 #### Your Team's Custom Path:
 - **Custom**: `/api/v2/` (also supported!)
@@ -43,15 +43,16 @@ We've updated the module to automatically detect and use the correct authenticat
 
 ## Configuration Examples for Your Setup
 
-### Option 1: Standard v2 API
+### Option 1: Default v2 Configuration (Recommended)
 ```hcl
 module "dns_record" {
   source = "./terraform-bluecat"
 
-  api_url     = "https://your-bluecat-server.company.com"
-  username    = "your-username"  
-  password    = "your-password"
-  api_version = "v2"  # This will use /Services/REST/v2
+  api_url  = "https://your-bluecat-server.company.com"
+  username = "your-username"  
+  password = "your-password"
+  # api_version = "v2"     # Default
+  # api_path = "/api/v2"   # Default
   
   zone         = "your-domain.com"
   record_type  = "CNAME"
@@ -61,15 +62,34 @@ module "dns_record" {
 }
 ```
 
-### Option 2: Your Team's Custom API Path  
+### Option 2: Custom API Path (For Specific Deployments)
 ```hcl
 module "dns_record" {
   source = "./terraform-bluecat"
 
   api_url  = "https://xyz"          # Your base URL
-  api_path = "/api/v2"              # Your custom path
+  api_path = "/api/v2"              # Custom path (matches default)
   username = "your-username"
   password = "your-password"
+  
+  zone         = "your-domain.com"
+  record_type  = "CNAME"
+  record_name  = "test-record"
+  record_value = "target.example.com"
+  ttl          = 300
+}
+```
+
+### Option 3: Legacy v1 Support
+```hcl
+module "dns_record" {
+  source = "./terraform-bluecat"
+
+  api_url     = "https://your-bluecat-server.company.com"
+  api_version = "v1"       # Legacy v1 API
+  api_path    = ""         # Use standard v1 path
+  username    = "your-username"
+  password    = "your-password"
   
   zone         = "your-domain.com"
   record_type  = "CNAME"
@@ -82,14 +102,14 @@ module "dns_record" {
 ## How the Module Handles Different Configurations
 
 ### URL Construction:
-- **Standard v1**: `https://xyz/Services/REST/v1`
-- **Standard v2**: `https://xyz/Services/REST/v2`  
-- **Custom path**: `https://xyz/api/v2`
+- **Default v2**: `https://xyz/api/v2` (default configuration)
+- **Legacy v1**: `https://xyz/Services/REST/v1`
+- **Custom path**: `https://xyz/api/v2` (same as default)
 
 ### Authentication Endpoints:
-- **Standard APIs**: Uses `/login` endpoint
-- **Custom /api/v2**: Automatically uses `/sessions` endpoint
-- **Result for your setup**: `https://xyz/api/v2/sessions`
+- **v2 APIs**: Uses `POST /sessions` endpoint
+- **v1 APIs**: Uses `GET /login` endpoint  
+- **Result for v2**: `https://xyz/api/v2/sessions`
 
 ### API Endpoints Used:
 - Authentication: `/sessions` (for your custom path)

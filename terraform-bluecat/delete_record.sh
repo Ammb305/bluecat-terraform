@@ -140,12 +140,23 @@ record_id=""
 # Check if the response contains data array and look for matching records
 if echo "$entities_body" | grep -q '"data"'; then
     # Look for records with matching name and type
-    # This is a simplified approach - in production you'd want more sophisticated parsing
-    matching_lines=$(echo "$entities_body" | grep -o '"id":[0-9]*' | head -1)
-    if [ -n "$matching_lines" ]; then
-        record_found=true
-        record_id=$(echo "$matching_lines" | sed 's/"id"://')
-    fi
+    # Split response by records and check each one
+    while IFS= read -r line; do
+        if echo "$line" | grep -q "\"name\": \"$RECORD_NAME\"" && echo "$line" | grep -q "\"type\": \"$RECORD_TYPE\""; then
+            record_id=$(echo "$line" | grep -o '"id":[0-9]*' | sed 's/"id"://')
+            if [ -n "$record_id" ]; then
+                record_found=true
+                break
+            fi
+        fi
+    done <<< "$(echo "$entities_body" | grep -o '{[^}]*}' | grep '"id"')"
+fi
+
+# Debug output
+echo "Looking for record: name='$RECORD_NAME', type='$RECORD_TYPE'"
+echo "Record found: $record_found"
+if [ "$record_found" = true ]; then
+    echo "Record ID for deletion: $record_id"
 fi
 
 if [ "$record_found" = false ]; then
