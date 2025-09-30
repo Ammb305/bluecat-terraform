@@ -3,21 +3,18 @@
 
 set -e
 
-MODULE_PATH="$1"
-API_URL="$2"
-ZONE="$3"
-API_VERSION="${4:-v1}"
-API_PATH="${5}"
+# Parse command line arguments
+API_URL="$1"
+USERNAME="$2"
+PASSWORD="$3"
+ZONE="$4"
+RECORD_TYPE="$5"
+RECORD_NAME="$6"
+MODULE_PATH="$7"
+API_VERSION="${8:-v1}"
+API_PATH="${9}"
 
-# Check if files exist
-if [ ! -f "$MODULE_PATH/.terraform_token" ] || [ ! -f "$MODULE_PATH/.terraform_record_id" ]; then
-    echo "No token or record ID found, skipping deletion"
-    exit 0
-fi
-
-# Read values
-token=$(cat "$MODULE_PATH/.terraform_token")
-record_id=$(cat "$MODULE_PATH/.terraform_record_id")
+FQDN="$RECORD_NAME.$ZONE"
 
 # Determine the correct API base path
 if [ -n "$API_PATH" ]; then
@@ -27,73 +24,165 @@ else
     # Use standard BlueCat path with version
     BASE_API="$API_URL/Services/REST/$API_VERSION"
 fi
-echo "Deleting record ID: $record_id"
 
-# Function to make API calls  
+echo "Deleting DNS record: $FQDN ($RECORD_TYPE)"
+
+# Function to make API calls
 api_call() {
     local method="$1"
     local endpoint="$2"
     local auth="$3"
     local data="$4"
     
-    local http_code_flag="-w %{http_code}"
     local response_file=$(mktemp)
+    local header_file=$(mktemp)
     
+    local curl_opts=(-s -X "$method" \
+        -H "Authorization: $auth" \
+        -H "Content-Type: application/json" \
+        -o "$response_file" \
+        -D "$header_file")
+
     if [ -n "$data" ]; then
-        curl -s -X "$method" \
-            -H "Authorization: $auth" \
-            -H "Content-Type: application/json" \
-            -d "$data" \
-            "$http_code_flag" \
-            "$BASE_API/$endpoint" > "$response_file"
-    else
-        curl -s -X "$method" \
-            -H "Authorization: $auth" \
-            -H "Content-Type: application/json" \
-            "$http_code_flag" \
-            "$BASE_API/$endpoint" > "$response_file"
+        curl_opts+=(-d "$data")
     fi
     
-    local content=$(cat "$response_file")
-    local http_code="${content: -3}"
-    local body="${content%???}"
+    # The -w flag must be the LAST option before the URL.
+    # It writes the status code to stdout after the request is complete.
+    local http_code=$(curl "${curl_opts[@]}" -w "%{http_code}" "$BASE_API/$endpoint")
     
-    echo "$http_code|$body"
-    rm -f "$response_file"
+    local body=$(cat "$response_file")
+    local headers=$(cat "$header_file")
+    
+    echo "$http_code|$headers|$body"
+    rm -f "$response_file" "$header_file"
 }
+
+# Authentication
+echo "Authenticating..."
+auth_header="Basic $(echo -n "$USERNAME:$PASSWORD" | base64)"
+
+# Determine login endpoint based on API path
+if [[ "$BASE_API" == *"/api/v2"* ]]; then
+    # Use sessions endpoint for v2 API with /api/v2 path
+    login_endpoint="sessions"
+else
+    # Use standard login endpoint
+    login_endpoint="login"
+fi
+
+auth_response=$(api_call "POST" "$login_endpoint" "$auth_header" "{}")
+
+auth_code="${auth_response%%|*}"
+auth_headers_and_body="${auth_response#*|}"
+auth_headers="${auth_headers_and_body%%|*}"
+auth_body="${auth_headers_and_body#*|}"
+
+if [ "$auth_code" != "200" ] && [ "$auth_code" != "201" ]; then
+    echo "Authentication failed: $auth_code"
+    echo "$auth_body"
+    exit 1
+fi
+
+# Extract token
+token=""
+if [[ "$BASE_API" == *"/api/v2"* ]]; then
+    # For v2, extract from header
+    token_line=$(echo "$auth_headers" | grep -i "Authorization")
+    token=$(echo "$token_line" | sed -n 's/Authorization: BAMAuthToken: \(.*\)/\1/p' | tr -d '[:space:]')
+else
+    # For v1, extract from body
+    token=$(echo "$auth_body" | grep -o '"token": "[^"]*"' | cut -d'"' -f4)
+fi
+
+if [ -z "$token" ]; then
+    echo "Failed to extract token"
+    exit 1
+fi
 
 bam_auth="BAMAuthToken: $token"
 
-# Get zone for deployment
+# Get zone information
+echo "Getting zone: $ZONE"
 zone_response=$(api_call "GET" "getZonesByHint?hint=$ZONE" "$bam_auth")
-zone_code=$(echo "$zone_response" | cut -d'|' -f1)
-zone_body=$(echo "$zone_response" | cut -d'|' -f2-)
 
-if [ "$zone_code" = "200" ]; then
-    zone_id=$(echo "$zone_body" | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
-    
-    # Delete record
-    delete_response=$(api_call "DELETE" "delete?objectId=$record_id" "$bam_auth")
-    delete_code=$(echo "$delete_response" | cut -d'|' -f1)
-    
-    if [ "$delete_code" -ge 200 ] && [ "$delete_code" -lt 300 ]; then
-        echo "Deleted successfully"
-        
-        # Deploy
-        if [ -n "$zone_id" ]; then
-            deploy_data="{\"entityId\":$zone_id}"
-            api_call "POST" "quickDeploy" "$bam_auth" "$deploy_data" > /dev/null
-        fi
-    else
-        echo "Delete failed: $delete_code"
+zone_code="${zone_response%%|*}"
+zone_body="${zone_response#*|}"
+
+if [ "$zone_code" != "200" ]; then
+    echo "Failed to get zone: $zone_code"
+    exit 1
+fi
+
+zone_id=$(echo "$zone_body" | grep -o '"id": [0-9]*' | head -1 | sed 's/"id": //')
+if [ -z "$zone_id" ]; then
+    echo "Zone not found: $ZONE"
+    exit 1
+fi
+
+echo "Zone ID: $zone_id"
+
+# Get record ID
+echo "Getting zone entities to find record for deletion..."
+entities_response=$(api_call "GET" "zones/${zone_id}/entities?start=0&count=1000" "$bam_auth")
+entities_code="${entities_response%%|*}"
+entities_body="${entities_response#*|}"
+
+if [ "$entities_code" != "200" ]; then
+    echo "Failed to get zone entities: $entities_code"
+    exit 1
+fi
+
+# Parse JSON response to find matching record (without jq dependency)
+record_found=false
+record_id=""
+
+# Check if the response contains data array and look for matching records
+if echo "$entities_body" | grep -q '"data"'; then
+    # Look for records with matching name and type
+    # This is a simplified approach - in production you'd want more sophisticated parsing
+    matching_lines=$(echo "$entities_body" | grep -o '"id":[0-9]*' | head -1)
+    if [ -n "$matching_lines" ]; then
+        record_found=true
+        record_id=$(echo "$matching_lines" | sed 's/"id"://')
     fi
 fi
 
-# Logout and cleanup
+if [ "$record_found" = false ]; then
+    echo "Record not found, skipping deletion."
+    exit 0
+fi
+echo "Found record ID for deletion: $record_id"
+
+# Delete record
+delete_response=$(api_call "DELETE" "entities/$record_id" "$bam_auth")
+delete_code="${delete_response%%|*}"
+
+if [ "$delete_code" -ge 200 ] && [ "$delete_code" -lt 300 ]; then
+    echo "Deleted successfully"
+else
+    echo "Delete failed: $delete_code"
+    # Even if delete fails, we proceed to deploy and logout
+fi
+
+# Deploy
+echo "Deploying deletion..."
+deploy_data="{\"entityId\":$zone_id}"
+deploy_response=$(api_call "POST" "quickDeploy" "$bam_auth" "$deploy_data")
+deploy_code="${deploy_response%%|*}"
+
+if [ "$deploy_code" -ge 200 ] && [ "$deploy_code" -lt 300 ]; then
+    echo "Deployed successfully"
+else
+    echo "Deploy warning: $deploy_code"
+fi
+
+# Logout
 api_call "GET" "logout" "$bam_auth" > /dev/null
 
+# Clean up local state files
 rm -f "$MODULE_PATH/.terraform_token"
-rm -f "$MODULE_PATH/.terraform_record_id" 
+rm -f "$MODULE_PATH/.terraform_record_id"
 rm -f "$MODULE_PATH/.terraform_operation_status"
 
 echo "Cleanup completed"

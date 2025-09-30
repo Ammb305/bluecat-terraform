@@ -24,7 +24,7 @@ variable "password" {
 variable "api_version" {
   description = "BlueCat API version (v1 or v2)"
   type        = string
-  default     = "v1"
+  default     = "v2"
   validation {
     condition     = contains(["v1", "v2"], var.api_version)
     error_message = "API version must be either 'v1' or 'v2'."
@@ -34,7 +34,7 @@ variable "api_version" {
 variable "api_path" {
   description = "Custom API path (overrides default version-based path). Use for custom endpoints like '/api/v2'"
   type        = string
-  default     = ""
+  default     = "/api/v2"
 }
 
 variable "zone" {

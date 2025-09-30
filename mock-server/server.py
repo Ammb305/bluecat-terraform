@@ -255,6 +255,175 @@ def quick_deploy():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+#
+# V2 API Endpoints
+#
+
+@app.route('/api/v2/sessions', methods=['POST'])
+def login_v2():
+    """Authenticate and return a token for v2"""
+    auth_header = request.headers.get('Authorization', '')
+    
+    if not auth_header.startswith('Basic '):
+        return jsonify({"error": "Basic authentication required"}), 401
+    
+    try:
+        # Decode base64 credentials
+        encoded_creds = auth_header.replace('Basic ', '')
+        decoded_creds = base64.b64decode(encoded_creds).decode('utf-8')
+        username, password = decoded_creds.split(':', 1)
+        
+        # Simple authentication (accept any non-empty credentials)
+        if not username or not password:
+            return jsonify({"error": "Invalid credentials"}), 401
+        
+        # Generate token
+        token = str(uuid.uuid4())
+        expires = datetime.now() + timedelta(hours=1)
+        
+        tokens[token] = {
+            'username': username,
+            'expires': expires
+        }
+        
+        # The v2 login response includes the token in the header and body
+        response = make_response(jsonify({
+            "id": "session",
+            "type": "session",
+            "username": username,
+        }))
+        response.headers['Authorization'] = f"BAMAuthToken: {token}"
+        return response
+        
+    except Exception as e:
+        return jsonify({"error": f"Authentication failed: {e}"}), 401
+
+@app.route('/api/v2/getZonesByHint', methods=['GET'])
+@require_auth
+def get_zones_by_hint_v2():
+    """Get zone information by hint (v2 API)"""
+    hint = request.args.get('hint', '')
+    
+    matching_zones = []
+    for zone_name, zone_data in zones.items():
+        if hint.lower() in zone_name.lower():
+            matching_zones.append(zone_data)
+    
+    return jsonify(matching_zones)
+
+@app.route('/api/v2/zones/<int:zone_id>/entities', methods=['GET'])
+@require_auth
+def get_zone_entities_v2(zone_id):
+    """Get all entities for a given zone"""
+    matching_records = []
+    for record_id, record_data in records.items():
+        if record_data.get('parentId') == zone_id:
+            matching_records.append({
+                "id": record_id,
+                "name": record_data['name'],
+                "type": record_data['type'],
+                "properties": f"rdata={record_data.get('rdata', '')}|ttl={record_data.get('ttl', '')}"
+            })
+    return jsonify({"data": matching_records})
+
+@app.route('/api/v2/zones/<int:zone_id>/entities', methods=['POST'])
+@require_auth
+def add_entity_v2(zone_id):
+    """Create a new entity in a zone"""
+    global record_counter
+    try:
+        data = request.get_json()
+        
+        if not all(k in data for k in ['name', 'type', 'properties']):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        zone_name = next((zname for zname, zdata in zones.items() if zdata['id'] == zone_id), None)
+        if not zone_name:
+            return jsonify({"error": "Invalid zone ID"}), 400
+
+        record_counter += 1
+        record_id = record_counter
+        
+        props = dict(item.split("=") for item in data['properties'].split("|"))
+        rdata = props.get('linkedRecordName') or props.get('addresses') or props.get('rdata', '').strip('\\"')
+
+        record_data = {
+            "name": data['name'],
+            "type": data['type'],
+            "rdata": rdata,
+            "ttl": props.get('ttl', 3600),
+            "zone": zone_name,
+            "parentId": zone_id,
+            "created": datetime.now().isoformat()
+        }
+        records[record_id] = record_data
+        
+        return jsonify({"id": record_id, "name": data['name'], "type": data['type']}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/v2/entities/<int:record_id>', methods=['PUT'])
+@require_auth
+def update_entity_v2(record_id):
+    """Update an existing entity"""
+    if record_id not in records:
+        return jsonify({"error": "Record not found"}), 404
+    
+    try:
+        data = request.get_json()
+        props = dict(item.split("=") for item in data['properties'].split("|"))
+        rdata = props.get('linkedRecordName') or props.get('addresses') or props.get('rdata', '').strip('\\"')
+
+        records[record_id]['name'] = data.get('name', records[record_id]['name'])
+        records[record_id]['rdata'] = rdata
+        records[record_id]['ttl'] = props.get('ttl', records[record_id]['ttl'])
+        records[record_id]['updated'] = datetime.now().isoformat()
+        
+        return jsonify(records[record_id])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/v2/entities/<int:record_id>', methods=['DELETE'])
+@require_auth
+def delete_entity_v2(record_id):
+    """Delete an entity"""
+    if record_id not in records:
+        return jsonify({"error": "Record not found"}), 404
+    
+    del records[record_id]
+    return '', 204
+
+@app.route('/api/v2/quickDeploy', methods=['POST'])
+@require_auth
+def quick_deploy_v2():
+    """Deploy configuration changes (v2 API)"""
+    try:
+        data = request.get_json()
+        
+        if 'entityId' not in data:
+            return jsonify({"error": "entityId is required"}), 400
+        
+        # Simulate deployment
+        return jsonify({
+            "message": "Configuration deployed successfully",
+            "deploymentId": str(uuid.uuid4())
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/v2/logout', methods=['GET'])
+@require_auth
+def logout_v2():
+    """Logout and invalidate token (v2 API)"""
+    auth_header = request.headers.get('Authorization', '')
+    token = auth_header.replace('BAMAuthToken: ', '')
+    
+    if token in tokens:
+        del tokens[token]
+    
+    return jsonify({"message": "Logged out successfully"})
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -284,8 +453,15 @@ if __name__ == '__main__':
     print("  PUT  /Services/REST/v1/update")
     print("  DELETE /Services/REST/v1/delete")
     print("  POST /Services/REST/v1/quickDeploy")
-    print("  GET  /health (debug)")
-    print("  GET  /debug/records (debug)")
+    print("\n--- V2 Endpoints ---")
+    print("  POST /api/v2/sessions")
+    print("  GET  /api/v2/zones/<zone_id>/entities")
+    print("  POST /api/v2/zones/<zone_id>/entities")
+    print("  PUT  /api/v2/entities/<record_id>")
+    print("  DELETE /api/v2/entities/<record_id>")
+    print("\n--- Debug Endpoints ---")
+    print("  GET  /health")
+    print("  GET  /debug/records")
     print("")
     print("Use any username/password for authentication")
     print("Server running on http://localhost:5001")
