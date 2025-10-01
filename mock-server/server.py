@@ -42,10 +42,16 @@ def require_auth(f):
     """Decorator to require valid authentication token"""
     def decorated_function(*args, **kwargs):
         auth_header = request.headers.get('Authorization', '')
-        if not auth_header.startswith('BAMAuthToken: '):
-            return jsonify({"error": "Invalid authentication"}), 401
         
-        token = auth_header.replace('BAMAuthToken: ', '')
+        # Handle both BAMAuthToken and Bearer token formats
+        token = None
+        if auth_header.startswith('BAMAuthToken: '):
+            token = auth_header.replace('BAMAuthToken: ', '')
+        elif auth_header.startswith('Bearer '):
+            token = auth_header.replace('Bearer ', '')
+        else:
+            return jsonify({"error": "Invalid authentication header"}), 401
+        
         if token not in tokens:
             return jsonify({"error": "Invalid or expired token"}), 401
         
@@ -262,16 +268,23 @@ def quick_deploy():
 @app.route('/api/v2/sessions', methods=['POST'])
 def login_v2():
     """Authenticate and return a token for v2"""
-    auth_header = request.headers.get('Authorization', '')
-    
-    if not auth_header.startswith('Basic '):
-        return jsonify({"error": "Basic authentication required"}), 401
-    
     try:
-        # Decode base64 credentials
-        encoded_creds = auth_header.replace('Basic ', '')
-        decoded_creds = base64.b64decode(encoded_creds).decode('utf-8')
-        username, password = decoded_creds.split(':', 1)
+        # Handle both JSON and Basic Auth
+        data = request.get_json()
+        
+        if data and 'username' in data and 'password' in data:
+            # JSON authentication
+            username = data['username']
+            password = data['password']
+        else:
+            # Basic authentication fallback
+            auth_header = request.headers.get('Authorization', '')
+            if not auth_header.startswith('Basic '):
+                return jsonify({"error": "Authentication required"}), 401
+            
+            encoded_creds = auth_header.replace('Basic ', '')
+            decoded_creds = base64.b64decode(encoded_creds).decode('utf-8')
+            username, password = decoded_creds.split(':', 1)
         
         # Simple authentication (accept any non-empty credentials)
         if not username or not password:
@@ -286,22 +299,280 @@ def login_v2():
             'expires': expires
         }
         
-        # The v2 login response includes the token in the header and body
-        response = make_response(jsonify({
+        # Return token in response body for script compatibility
+        return jsonify({
+            "token": token,
             "id": "session",
-            "type": "session",
+            "type": "session", 
             "username": username,
-        }))
-        response.headers['Authorization'] = f"BAMAuthToken: {token}"
-        return response
+            "expires": expires.isoformat()
+        })
         
     except Exception as e:
         return jsonify({"error": f"Authentication failed: {e}"}), 401
 
+# --- V2 REST API Endpoints (Simple Pattern) ---
+
+@app.route('/api/v2/zones', methods=['GET'])
+@require_auth
+def get_zones_v2():
+    """Get zones by name filter (v2 API)"""
+    zone_name = request.args.get('name', '')
+    
+    if zone_name:
+        # Return specific zone by exact name match
+        for zname, zdata in zones.items():
+            if zname == zone_name:
+                return jsonify([{
+                    "id": zdata['id'],
+                    "name": zname,
+                    "type": zdata.get('type', 'Zone'),
+                    "properties": zdata.get('properties', '')
+                }])
+        return jsonify([])  # Zone not found
+    else:
+        # Return all zones
+        zone_list = []
+        for zname, zdata in zones.items():
+            zone_list.append({
+                "id": zdata['id'],
+                "name": zname,
+                "type": zdata.get('type', 'Zone'),
+                "properties": zdata.get('properties', '')
+            })
+        return jsonify(zone_list)
+
+@app.route('/api/v2/records', methods=['GET'])
+@require_auth
+def get_records_v2():
+    """Get records by zone, name, and type (v2 API)"""
+    zone_id = request.args.get('zone')
+    record_name = request.args.get('name')
+    record_type = request.args.get('type')
+    
+    matching_records = []
+    for record_id, record_data in records.items():
+        # Check zone match
+        if zone_id and str(record_data.get('parentId', '')) != str(zone_id):
+            continue
+        
+        # Check name match (FQDN)
+        if record_name:
+            fqdn = f"{record_data['name']}.{record_data['zone']}"
+            if fqdn != record_name:
+                continue
+        
+        # Check type match
+        if record_type and record_data.get('type', '').upper() != record_type.upper():
+            continue
+        
+        matching_records.append({
+            "id": record_id,
+            "name": f"{record_data['name']}.{record_data['zone']}",
+            "type": record_data.get('type', 'HostRecord'),
+            "rdata": record_data.get('rdata', ''),
+            "ttl": record_data.get('ttl', 3600),
+            "zoneId": record_data.get('parentId')
+        })
+    
+    return jsonify(matching_records)
+
+@app.route('/api/v2/records', methods=['POST'])
+@require_auth
+def create_record_v2():
+    """Create a new DNS record (v2 API)"""
+    global record_counter
+    
+    try:
+        data = request.get_json()
+        
+        if not all(k in data for k in ['name', 'type', 'zoneId']):
+            return jsonify({"error": "Missing required fields: name, type, zoneId"}), 400
+        
+        # Find zone name by ID
+        zone_name = None
+        for zname, zdata in zones.items():
+            if zdata['id'] == data['zoneId']:
+                zone_name = zname
+                break
+        
+        if not zone_name:
+            return jsonify({"error": "Invalid zone ID"}), 400
+        
+        # Extract record name from FQDN
+        fqdn = data['name']
+        if fqdn.endswith(f".{zone_name}"):
+            record_name = fqdn[:-len(f".{zone_name}")]
+        else:
+            record_name = fqdn
+        
+        # Extract rdata based on record type and structure
+        rdata_value = ""
+        if 'rdata' in data:
+            rdata_obj = data['rdata']
+            if isinstance(rdata_obj, dict):
+                # Handle structured rdata
+                rdata_value = (rdata_obj.get('address') or 
+                              rdata_obj.get('cname') or 
+                              rdata_obj.get('text') or str(rdata_obj))
+            else:
+                rdata_value = str(rdata_obj)
+        
+        # Create record
+        record_counter += 1
+        record_id = record_counter
+        
+        record_data = {
+            "name": record_name,
+            "type": data['type'],
+            "rdata": rdata_value,
+            "ttl": data.get('ttl', 3600),
+            "zone": zone_name,
+            "parentId": data['zoneId'],
+            "created": datetime.now().isoformat()
+        }
+        
+        records[record_id] = record_data
+        
+        return jsonify({
+            "id": record_id,
+            "name": fqdn,
+            "type": data['type'],
+            "rdata": rdata_value,
+            "ttl": record_data['ttl'],
+            "zoneId": data['zoneId']
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/v2/records/<int:record_id>', methods=['PUT'])
+@require_auth
+def update_record_v2(record_id):
+    """Update an existing DNS record (v2 API)"""
+    if record_id not in records:
+        return jsonify({"error": "Record not found"}), 404
+    
+    try:
+        data = request.get_json()
+        
+        # Extract rdata based on record type and structure
+        if 'rdata' in data:
+            rdata_obj = data['rdata']
+            if isinstance(rdata_obj, dict):
+                rdata_value = (rdata_obj.get('address') or 
+                              rdata_obj.get('cname') or 
+                              rdata_obj.get('text') or str(rdata_obj))
+            else:
+                rdata_value = str(rdata_obj)
+            records[record_id]['rdata'] = rdata_value
+        
+        # Update other fields
+        if 'ttl' in data:
+            records[record_id]['ttl'] = data['ttl']
+        if 'type' in data:
+            records[record_id]['type'] = data['type']
+        
+        records[record_id]['updated'] = datetime.now().isoformat()
+        
+        # Build response
+        fqdn = f"{records[record_id]['name']}.{records[record_id]['zone']}"
+        
+        return jsonify({
+            "id": record_id,
+            "name": fqdn,
+            "type": records[record_id]['type'],
+            "rdata": records[record_id]['rdata'],
+            "ttl": records[record_id]['ttl'],
+            "zoneId": records[record_id]['parentId']
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@app.route('/api/v2/records/<int:record_id>', methods=['DELETE'])
+@require_auth
+def delete_record_v2(record_id):
+    """Delete a DNS record (v2 API)"""
+    if record_id not in records:
+        return jsonify({"error": "Record not found"}), 404
+    
+    del records[record_id]
+    return '', 204
+
+@app.route('/api/v2/zones/<int:zone_id>/deploy', methods=['POST'])
+@require_auth
+def deploy_zone_v2(zone_id):
+    """Deploy zone changes (v2 API)"""
+    # Find zone by ID
+    zone_found = False
+    for zname, zdata in zones.items():
+        if zdata['id'] == zone_id:
+            zone_found = True
+            break
+    
+    if not zone_found:
+        return jsonify({"error": "Zone not found"}), 404
+    
+    return jsonify({
+        "message": f"Zone {zone_id} deployed successfully",
+        "deploymentId": str(uuid.uuid4()),
+        "status": "completed"
+    })
+
+# --- Services/REST/v2 Aliases (for backward compatibility) ---
+
+@app.route('/Services/REST/v2/sessions', methods=['POST'])
+def login_services_rest_v2():
+    """Alias for /api/v2/sessions"""
+    return login_v2()
+
+@app.route('/Services/REST/v2/zones', methods=['GET'])
+@require_auth
+def get_zones_services_rest_v2():
+    """Alias for /api/v2/zones"""
+    return get_zones_v2()
+
+@app.route('/Services/REST/v2/records', methods=['GET'])
+@require_auth
+def get_records_services_rest_v2():
+    """Alias for /api/v2/records"""
+    return get_records_v2()
+
+@app.route('/Services/REST/v2/records', methods=['POST'])
+@require_auth
+def create_record_services_rest_v2():
+    """Alias for /api/v2/records"""
+    return create_record_v2()
+
+@app.route('/Services/REST/v2/records/<int:record_id>', methods=['PUT'])
+@require_auth
+def update_record_services_rest_v2(record_id):
+    """Alias for /api/v2/records/{id}"""
+    return update_record_v2(record_id)
+
+@app.route('/Services/REST/v2/records/<int:record_id>', methods=['DELETE'])
+@require_auth
+def delete_record_services_rest_v2(record_id):
+    """Alias for /api/v2/records/{id}"""
+    return delete_record_v2(record_id)
+
+@app.route('/Services/REST/v2/zones/<int:zone_id>/deploy', methods=['POST'])
+@require_auth
+def deploy_zone_services_rest_v2(zone_id):
+    """Alias for /api/v2/zones/{id}/deploy"""
+    return deploy_zone_v2(zone_id)
+
+@app.route('/Services/REST/v2/sessions/<token>', methods=['DELETE'])
+@require_auth
+def delete_session_services_rest_v2(token):
+    """Alias for /api/v2/sessions/{token}"""
+    return delete_session_v2(token)
+
 @app.route('/api/v2/getZonesByHint', methods=['GET'])
 @require_auth
 def get_zones_by_hint_v2():
-    """Get zone information by hint (v2 API)"""
+    """Get zone information by hint (v2 API) - Legacy endpoint"""
     hint = request.args.get('hint', '')
     
     matching_zones = []
@@ -412,14 +683,29 @@ def quick_deploy_v2():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+@app.route('/api/v2/sessions/<token>', methods=['DELETE'])
+@require_auth
+def delete_session_v2(token):
+    """Delete session/logout (v2 API)"""
+    if token in tokens:
+        del tokens[token]
+    
+    return '', 204
+
 @app.route('/api/v2/logout', methods=['GET'])
 @require_auth
 def logout_v2():
-    """Logout and invalidate token (v2 API)"""
+    """Logout and invalidate token (v2 API) - Legacy endpoint"""
     auth_header = request.headers.get('Authorization', '')
-    token = auth_header.replace('BAMAuthToken: ', '')
     
-    if token in tokens:
+    # Extract token from either format
+    token = None
+    if auth_header.startswith('BAMAuthToken: '):
+        token = auth_header.replace('BAMAuthToken: ', '')
+    elif auth_header.startswith('Bearer '):
+        token = auth_header.replace('Bearer ', '')
+    
+    if token and token in tokens:
         del tokens[token]
     
     return jsonify({"message": "Logged out successfully"})
@@ -453,8 +739,25 @@ if __name__ == '__main__':
     print("  PUT  /Services/REST/v1/update")
     print("  DELETE /Services/REST/v1/delete")
     print("  POST /Services/REST/v1/quickDeploy")
-    print("\n--- V2 Endpoints ---")
+    print("\n--- V2 Endpoints (Recommended) ---")
     print("  POST /api/v2/sessions")
+    print("  DELETE /api/v2/sessions/<token>")
+    print("  GET  /api/v2/zones?name={zone}")
+    print("  GET  /api/v2/records?zone={id}&name={fqdn}&type={type}")
+    print("  POST /api/v2/records")
+    print("  PUT  /api/v2/records/<record_id>")
+    print("  DELETE /api/v2/records/<record_id>")
+    print("  POST /api/v2/zones/<zone_id>/deploy")
+    print("\n--- Services/REST/v2 Endpoints (Aliases) ---")
+    print("  POST /Services/REST/v2/sessions")
+    print("  DELETE /Services/REST/v2/sessions/<token>")
+    print("  GET  /Services/REST/v2/zones?name={zone}")
+    print("  GET  /Services/REST/v2/records?zone={id}&name={fqdn}&type={type}")
+    print("  POST /Services/REST/v2/records")
+    print("  PUT  /Services/REST/v2/records/<record_id>")
+    print("  DELETE /Services/REST/v2/records/<record_id>")
+    print("  POST /Services/REST/v2/zones/<zone_id>/deploy")
+    print("\n--- V2 Legacy BlueCat Endpoints ---")
     print("  GET  /api/v2/zones/<zone_id>/entities")
     print("  POST /api/v2/zones/<zone_id>/entities")
     print("  PUT  /api/v2/entities/<record_id>")

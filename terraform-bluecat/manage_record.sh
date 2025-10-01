@@ -1,222 +1,164 @@
 #!/bin/bash
-# BlueCat DNS Record Management Script
+# BlueCat DNS Record Management Script - REST API v2
 
 set -e
 
-# Parse command line arguments
-API_URL="$1"
+# Parse arguments
+API_URL="$1"        # e.g. http://localhost:5001
 USERNAME="$2"
 PASSWORD="$3"
 ZONE="$4"
-RECORD_TYPE="$5"
-RECORD_NAME="$6" 
-RECORD_VALUE="$7"
+RECORD_TYPE="$5"    # A, CNAME, TXT
+RECORD_NAME="$6"    # e.g. www
+RECORD_VALUE="$7"   # e.g. 1.2.3.4 or target cname
 TTL="$8"
 MODULE_PATH="$9"
-API_VERSION="${10:-v1}"
-API_PATH="${11}"
+API_VERSION="${10}"  # e.g. v2
+API_PATH="${11}"     # e.g. /api/v2
+
+# Construct the full API base URL
+if [ -n "$API_PATH" ]; then
+    BASE_API_URL="$API_URL$API_PATH"
+else
+    BASE_API_URL="$API_URL/api/v2"
+fi
 
 FQDN="$RECORD_NAME.$ZONE"
 
-# Determine the correct API base path
-if [ -n "$API_PATH" ]; then
-    # Use custom API path (e.g., "/api/v2")
-    BASE_API="$API_URL$API_PATH"
-else
-    # Use standard BlueCat path with version
-    BASE_API="$API_URL/Services/REST/$API_VERSION"
-fi
+echo "Managing DNS record: $FQDN ($RECORD_TYPE) using API v2"
+echo "Base API URL: $BASE_API_URL"
 
-echo "Managing DNS record: $FQDN ($RECORD_TYPE)"
-
-# Function to make API calls
-api_call() {
-    local method="$1"
-    local endpoint="$2"
-    local auth="$3"
-    local data="$4"
-    
-    local response_file=$(mktemp)
-    local header_file=$(mktemp)
-    
-    local curl_opts=(-s -X "$method" \
-        -H "Authorization: $auth" \
-        -H "Content-Type: application/json" \
-        -o "$response_file" \
-        -D "$header_file")
-
-    if [ -n "$data" ]; then
-        curl_opts+=(-d "$data")
-    fi
-    
-    # The -w flag must be the LAST option before the URL.
-    # It writes the status code to stdout after the request is complete.
-    local http_code=$(curl "${curl_opts[@]}" -w "%{http_code}" "$BASE_API/$endpoint")
-    
-    local body=$(cat "$response_file")
-    local headers=$(cat "$header_file")
-    
-    echo "$http_code|$headers|$body"
-    rm -f "$response_file" "$header_file"
-}
-
-# Authentication
+# --- Authentication ---
 echo "Authenticating..."
-auth_header="Basic $(echo -n "$USERNAME:$PASSWORD" | base64)"
+auth_response=$(curl -s -X POST "$BASE_API_URL/sessions" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}")
 
-# Determine login endpoint based on API path
-if [[ "$BASE_API" == *"/api/v2"* ]]; then
-    # Use sessions endpoint for v2 API with /api/v2 path
-    login_endpoint="sessions"
-else
-    # Use standard login endpoint
-    login_endpoint="login"
-fi
+# Extract token from JSON response with multiple methods
+token=$(echo "$auth_response" | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
-auth_response=$(api_call "POST" "$login_endpoint" "$auth_header" "{}")
-
-auth_code="${auth_response%%|*}"
-auth_headers_and_body="${auth_response#*|}"
-auth_headers="${auth_headers_and_body%%|*}"
-auth_body="${auth_headers_and_body#*|}"
-
-if [ "$auth_code" != "200" ] && [ "$auth_code" != "201" ]; then
-    echo "Authentication failed: $auth_code"
-    echo "$auth_body"
-    exit 1
-fi
-
-# Extract token
-token=""
-if [[ "$BASE_API" == *"/api/v2"* ]]; then
-    # For v2, extract from header
-    token_line=$(echo "$auth_headers" | grep -i "Authorization")
-    token=$(echo "$token_line" | sed -n 's/Authorization: BAMAuthToken: \(.*\)/\1/p' | tr -d '[:space:]')
-else
-    # For v1, extract from body
-    token=$(echo "$auth_body" | grep -o '"token": "[^"]*"' | cut -d'"' -f4)
+if [ -z "$token" ]; then
+    # Try alternate extraction method
+    token=$(echo "$auth_response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 fi
 
 if [ -z "$token" ]; then
-    echo "Failed to extract token"
+    # Try jq if available (silent fallback)
+    token=$(echo "$auth_response" | jq -r '.token' 2>/dev/null || echo "")
+fi
+
+if [ -z "$token" ] || [ "$token" = "null" ]; then
+    echo "Auth failed. Could not extract token from response: $auth_response"
     exit 1
 fi
 
+echo "Token extracted successfully: ${token:0:8}..."
+
+auth_header="Authorization: Bearer $token"
 echo "$token" > "$MODULE_PATH/.terraform_token"
 
-# Get zone information
-echo "Getting zone: $ZONE"
-bam_auth="BAMAuthToken: $token"
-zone_response=$(api_call "GET" "getZonesByHint?hint=$ZONE" "$bam_auth")
+# --- Get Zone ---
+echo "Getting zone ID for: $ZONE"
+zone_response=$(curl -s -X GET "$BASE_API_URL/zones?name=$ZONE" -H "$auth_header")
 
-zone_code="${zone_response%%|*}"
-zone_body="${zone_response#*|}"
+# Extract zone ID from JSON response with multiple methods
+zone_id=$(echo "$zone_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/' | head -1)
 
-if [ "$zone_code" != "200" ]; then
-    echo "Failed to get zone: $zone_code"
-    exit 1
+if [ -z "$zone_id" ]; then
+    # Try alternate extraction method
+    zone_id=$(echo "$zone_response" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
 fi
 
-zone_id=$(echo "$zone_body" | grep -o '"id": [0-9]*' | head -1 | sed 's/"id": //')
 if [ -z "$zone_id" ]; then
+    # Try jq if available (silent fallback)
+    zone_id=$(echo "$zone_response" | jq -r '.[0].id' 2>/dev/null || echo "")
+fi
+
+if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then
     echo "Zone not found: $ZONE"
+    echo "Response: $zone_response"
     exit 1
 fi
 
 echo "Zone ID: $zone_id"
 
-# Check existing record
-echo "Getting zone entities..."
-entities_response=$(api_call "GET" "zones/${zone_id}/entities?start=0&count=1000" "$bam_auth")
-entities_code="${entities_response%%|*}"
-entities_body="${entities_response#*|}"
+# --- Check existing record ---
+echo "Checking for existing record..."
+record_response=$(curl -s -X GET "$BASE_API_URL/records?zone=$zone_id&name=$FQDN&type=$RECORD_TYPE" -H "$auth_header")
 
-if [ "$entities_code" != "200" ]; then
-    echo "Failed to get zone entities: $entities_code"
+record_id=$(echo "$record_response" | grep -o '"id":[0-9]*' | head -1 | sed 's/"id"://')
+
+# --- Build JSON payload ---
+if [ "$RECORD_TYPE" = "A" ] || [ "$RECORD_TYPE" = "AAAA" ]; then
+    record_json="{\"name\":\"$FQDN\",\"type\":\"$RECORD_TYPE\",\"rdata\":{\"address\":\"$RECORD_VALUE\"},\"ttl\":$TTL,\"zoneId\":$zone_id}"
+elif [ "$RECORD_TYPE" = "CNAME" ]; then
+    record_json="{\"name\":\"$FQDN\",\"type\":\"CNAME\",\"rdata\":{\"cname\":\"$RECORD_VALUE\"},\"ttl\":$TTL,\"zoneId\":$zone_id}"
+elif [ "$RECORD_TYPE" = "TXT" ]; then
+    record_json="{\"name\":\"$FQDN\",\"type\":\"TXT\",\"rdata\":{\"text\":\"$RECORD_VALUE\"},\"ttl\":$TTL,\"zoneId\":$zone_id}"
+else
+    echo "Unsupported record type: $RECORD_TYPE"
     exit 1
 fi
 
-# Parse JSON response to find matching record
-record_exists=false
-record_id=""
-
-# Check if the response contains data array
-if echo "$entities_body" | grep -q '"data"'; then
-    # Extract records that match our name and type
-    matching_lines=$(echo "$entities_body" | grep -o '"id":[0-9]*' | head -1)
-    if [ -n "$matching_lines" ]; then
-        # For simplicity, we'll assume if there are any records, we need to check them
-        # This is a basic implementation - in production you'd want more sophisticated parsing
-        record_exists=true
-        record_id=$(echo "$matching_lines" | sed 's/"id"://')
-        echo "Existing record ID: $record_id"
-    fi
-fi
-
-# Prepare record data
-if [ "$RECORD_TYPE" = "TXT" ]; then
-    properties="rdata=\\\"$RECORD_VALUE\\\"|ttl=$TTL"
-elif [ "$RECORD_TYPE" = "CNAME" ]; then
-    properties="linkedRecordName=$RECORD_VALUE|ttl=$TTL"
-else
-    properties="addresses=$RECORD_VALUE|ttl=$TTL"
-fi
-
-if [ "$record_exists" = true ]; then
-    # Update
-    echo "Updating record..."
-    update_data="{\"name\":\"$RECORD_NAME\",\"type\":\"$RECORD_TYPE\",\"properties\":\"$properties\"}"
+# --- Update or Create ---
+if [ -n "$record_id" ]; then
+    echo "Updating record ID: $record_id"
     
-    update_response=$(api_call "PUT" "entities/$record_id" "$bam_auth" "$update_data")
-    update_code="${update_response%%|*}"
+    # Store response body and code separately
+    response_file=$(mktemp)
+    update_code=$(curl -s -o "$response_file" -w "%{http_code}" \
+        -X PUT "$BASE_API_URL/records/$record_id" \
+        -H "$auth_header" -H "Content-Type: application/json" \
+        -d "$record_json")
     
-    if [ "$update_code" -ge 200 ] && [ "$update_code" -lt 300 ]; then
-        echo "Updated successfully"
+    update_body=$(cat "$response_file")
+    rm -f "$response_file"
+
+    if [ "$update_code" = "200" ]; then
+        echo "Record updated successfully"
         echo "$record_id" > "$MODULE_PATH/.terraform_record_id"
         echo "updated" > "$MODULE_PATH/.terraform_operation_status"
     else
-        echo "Update failed: $update_code"
+        echo "Update failed. Code: $update_code"
+        echo "Response: $update_body"
         exit 1
     fi
 else
-    # Create
-    echo "Creating record..."
-    create_data="{\"name\":\"$RECORD_NAME\",\"type\":\"$RECORD_TYPE\",\"properties\":\"$properties\"}"
-    create_response=$(api_call "POST" "zones/${zone_id}/entities" "$bam_auth" "$create_data")
-    create_code="${create_response%%|*}"
-    create_body="${create_response#*|}"
+    echo "Creating new record..."
     
-    if [ "$create_code" -ge 200 ] && [ "$create_code" -lt 300 ]; then
-        echo "Created successfully"
-        new_id=$(echo "$create_body" | grep -o '"id":[0-9]*' | head -1 | sed 's/"id"://')
+    # Store response body and code separately to avoid parsing issues
+    response_file=$(mktemp)
+    create_code=$(curl -s -o "$response_file" -w "%{http_code}" \
+        -X POST "$BASE_API_URL/records" \
+        -H "$auth_header" -H "Content-Type: application/json" \
+        -d "$record_json")
+    
+    create_body=$(cat "$response_file")
+    rm -f "$response_file"
+
+    if [ "$create_code" = "201" ]; then
+        # Extract ID with improved pattern (handles whitespace)
+        new_id=$(echo "$create_body" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/' | head -1)
+        
+        # Fallback extraction methods
         if [ -z "$new_id" ]; then
-            # If we can't extract the ID, try to extract just numbers from the response
-            new_id=$(echo "$create_body" | grep -o '[0-9]\{6,\}' | head -1)
+            new_id=$(echo "$create_body" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
         fi
+        
         if [ -z "$new_id" ]; then
-            new_id="unknown"
+            new_id=$(echo "$create_body" | jq -r '.id' 2>/dev/null || echo "")
         fi
+        
+        echo "Record created with ID: $new_id"
         echo "$new_id" > "$MODULE_PATH/.terraform_record_id"
         echo "created" > "$MODULE_PATH/.terraform_operation_status"
     else
-        echo "Create failed: $create_code"
+        echo "Create failed. Code: $create_code"
+        echo "Response: $create_body"
         exit 1
     fi
 fi
 
-# Deploy
-echo "Deploying..."
-deploy_data="{\"entityId\":$zone_id}"
-deploy_response=$(api_call "POST" "quickDeploy" "$bam_auth" "$deploy_data")
-deploy_code="${deploy_response%%|*}"
-
-if [ "$deploy_code" -ge 200 ] && [ "$deploy_code" -lt 300 ]; then
-    echo "Deployed successfully"
-else
-    echo "Deploy warning: $deploy_code"
-fi
-
-# Logout
-api_call "GET" "logout" "$bam_auth" > /dev/null
-
+# --- Logout ---
+curl -s -X DELETE "$BASE_API_URL/sessions/$token" -H "$auth_header" > /dev/null
 echo "Completed successfully"
