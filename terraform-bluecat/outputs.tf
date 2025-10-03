@@ -1,32 +1,32 @@
-# Outputs for BlueCat DNS Record Management Module
-
 output "record_id" {
-  description = "Unique identifier for the DNS record"
+  description = "The ID of the DNS record created or updated"
   value       = local.record_id
 }
 
-output "status" {
-  description = "Status of the DNS record operation"
+output "operation_status" {
+  description = "The operation performed (created or updated)"
   value       = local.operation_status
 }
 
-output "record_fqdn" {
-  description = "Fully qualified domain name of the record"
-  value       = "${var.record_name}.${var.zone}"
+output "fqdn" {
+  description = "The fully qualified domain name of the record"
+  value       = local.fqdn
 }
 
-output "record_type" {
-  description = "Type of the DNS record"
-  value       = var.record_type
+output "zone_id" {
+  description = "The zone ID where the record was created"
+  value       = local.zone_id
 }
 
-output "record_value" {
-  description = "Value of the DNS record"
-  value       = var.record_value
-  sensitive   = false
-}
-
-output "ttl" {
-  description = "Time to live of the DNS record"
-  value       = var.ttl
+output "record_details" {
+  description = "Complete record details"
+  value = {
+    record_id        = local.record_id
+    operation_status = local.operation_status
+    fqdn             = local.fqdn
+    zone_id          = local.zone_id
+    record_type      = var.record_type
+    record_value     = var.record_value
+    ttl              = var.ttl
+  }
 }

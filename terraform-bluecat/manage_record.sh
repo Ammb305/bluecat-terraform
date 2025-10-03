@@ -3,18 +3,8 @@
 
 set -e
 
-# Parse arguments
-API_URL="$1"        # e.g. http://localhost:5001
-USERNAME="$2"
-PASSWORD="$3"
-ZONE="$4"
-RECORD_TYPE="$5"    # A, CNAME, TXT
-RECORD_NAME="$6"    # e.g. www
-RECORD_VALUE="$7"   # e.g. 1.2.3.4 or target cname
-TTL="$8"
-MODULE_PATH="$9"
-API_VERSION="${10}"  # e.g. v2
-API_PATH="${11}"     # e.g. /api/v2
+# Read JSON input from stdin (for external data source)
+eval "$(jq -r '@sh "API_URL=\(.api_url) USERNAME=\(.username) PASSWORD=\(.password) ZONE=\(.zone) RECORD_TYPE=\(.record_type) RECORD_NAME=\(.record_name) RECORD_VALUE=\(.record_value) TTL=\(.ttl) API_VERSION=\(.api_version) API_PATH=\(.api_path)"')"
 
 # Construct the full API base URL
 if [ -n "$API_PATH" ]; then
@@ -25,11 +15,12 @@ fi
 
 FQDN="$RECORD_NAME.$ZONE"
 
-echo "Managing DNS record: $FQDN ($RECORD_TYPE) using API v2"
-echo "Base API URL: $BASE_API_URL"
+# Output debug info to stderr (won't interfere with JSON output)
+echo "Managing DNS record: $FQDN ($RECORD_TYPE) using API v2" >&2
+echo "Base API URL: $BASE_API_URL" >&2
 
 # --- Authentication ---
-echo "Authenticating..."
+echo "Authenticating..." >&2
 auth_response=$(curl -s -X POST "$BASE_API_URL/sessions" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}")
@@ -38,52 +29,46 @@ auth_response=$(curl -s -X POST "$BASE_API_URL/sessions" \
 token=$(echo "$auth_response" | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
 if [ -z "$token" ]; then
-    # Try alternate extraction method
     token=$(echo "$auth_response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 fi
 
 if [ -z "$token" ]; then
-    # Try jq if available (silent fallback)
     token=$(echo "$auth_response" | jq -r '.token' 2>/dev/null || echo "")
 fi
 
 if [ -z "$token" ] || [ "$token" = "null" ]; then
-    echo "Auth failed. Could not extract token from response: $auth_response"
+    echo "Auth failed. Could not extract token from response: $auth_response" >&2
     exit 1
 fi
 
-echo "Token extracted successfully: ${token:0:8}..."
+echo "Token extracted successfully: ${token:0:8}..." >&2
 
 auth_header="Authorization: Bearer $token"
-echo "$token" > "$MODULE_PATH/.terraform_token"
 
 # --- Get Zone ---
-echo "Getting zone ID for: $ZONE"
+echo "Getting zone ID for: $ZONE" >&2
 zone_response=$(curl -s -X GET "$BASE_API_URL/zones?name=$ZONE" -H "$auth_header")
 
-# Extract zone ID from JSON response with multiple methods
 zone_id=$(echo "$zone_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/' | head -1)
 
 if [ -z "$zone_id" ]; then
-    # Try alternate extraction method
     zone_id=$(echo "$zone_response" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
 fi
 
 if [ -z "$zone_id" ]; then
-    # Try jq if available (silent fallback)
     zone_id=$(echo "$zone_response" | jq -r '.[0].id' 2>/dev/null || echo "")
 fi
 
 if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then
-    echo "Zone not found: $ZONE"
-    echo "Response: $zone_response"
+    echo "Zone not found: $ZONE" >&2
+    echo "Response: $zone_response" >&2
     exit 1
 fi
 
-echo "Zone ID: $zone_id"
+echo "Zone ID: $zone_id" >&2
 
 # --- Check existing record ---
-echo "Checking for existing record..."
+echo "Checking for existing record..." >&2
 record_response=$(curl -s -X GET "$BASE_API_URL/records?zone=$zone_id&name=$FQDN&type=$RECORD_TYPE" -H "$auth_header")
 
 record_id=$(echo "$record_response" | grep -o '"id":[0-9]*' | head -1 | sed 's/"id"://')
@@ -96,15 +81,17 @@ elif [ "$RECORD_TYPE" = "CNAME" ]; then
 elif [ "$RECORD_TYPE" = "TXT" ]; then
     record_json="{\"name\":\"$FQDN\",\"type\":\"TXT\",\"rdata\":{\"text\":\"$RECORD_VALUE\"},\"ttl\":$TTL,\"zoneId\":$zone_id}"
 else
-    echo "Unsupported record type: $RECORD_TYPE"
+    echo "Unsupported record type: $RECORD_TYPE" >&2
     exit 1
 fi
 
 # --- Update or Create ---
+operation_status=""
+final_record_id=""
+
 if [ -n "$record_id" ]; then
-    echo "Updating record ID: $record_id"
+    echo "Updating record ID: $record_id" >&2
     
-    # Store response body and code separately
     response_file=$(mktemp)
     update_code=$(curl -s -o "$response_file" -w "%{http_code}" \
         -X PUT "$BASE_API_URL/records/$record_id" \
@@ -115,18 +102,17 @@ if [ -n "$record_id" ]; then
     rm -f "$response_file"
 
     if [ "$update_code" = "200" ]; then
-        echo "Record updated successfully"
-        echo "$record_id" > "$MODULE_PATH/.terraform_record_id"
-        echo "updated" > "$MODULE_PATH/.terraform_operation_status"
+        echo "Record updated successfully" >&2
+        operation_status="updated"
+        final_record_id="$record_id"
     else
-        echo "Update failed. Code: $update_code"
-        echo "Response: $update_body"
+        echo "Update failed. Code: $update_code" >&2
+        echo "Response: $update_body" >&2
         exit 1
     fi
 else
-    echo "Creating new record..."
+    echo "Creating new record..." >&2
     
-    # Store response body and code separately to avoid parsing issues
     response_file=$(mktemp)
     create_code=$(curl -s -o "$response_file" -w "%{http_code}" \
         -X POST "$BASE_API_URL/records" \
@@ -137,10 +123,8 @@ else
     rm -f "$response_file"
 
     if [ "$create_code" = "201" ]; then
-        # Extract ID with improved pattern (handles whitespace)
         new_id=$(echo "$create_body" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/' | head -1)
         
-        # Fallback extraction methods
         if [ -z "$new_id" ]; then
             new_id=$(echo "$create_body" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
         fi
@@ -149,16 +133,25 @@ else
             new_id=$(echo "$create_body" | jq -r '.id' 2>/dev/null || echo "")
         fi
         
-        echo "Record created with ID: $new_id"
-        echo "$new_id" > "$MODULE_PATH/.terraform_record_id"
-        echo "created" > "$MODULE_PATH/.terraform_operation_status"
+        echo "Record created with ID: $new_id" >&2
+        operation_status="created"
+        final_record_id="$new_id"
     else
-        echo "Create failed. Code: $create_code"
-        echo "Response: $create_body"
+        echo "Create failed. Code: $create_code" >&2
+        echo "Response: $create_body" >&2
         exit 1
     fi
 fi
 
 # --- Logout ---
-curl -s -X DELETE "$BASE_API_URL/sessions/$token" -H "$auth_header" > /dev/null
-echo "Completed successfully"
+curl -s -X DELETE "$BASE_API_URL/sessions/$token" -H "$auth_header" > /dev/null 2>&1
+echo "Completed successfully" >&2
+
+# Output JSON result to stdout for Terraform to capture
+# This is the ONLY output to stdout - everything else goes to stderr
+jq -n \
+    --arg record_id "$final_record_id" \
+    --arg operation_status "$operation_status" \
+    --arg fqdn "$FQDN" \
+    --arg zone_id "$zone_id" \
+    '{record_id: $record_id, operation_status: $operation_status, fqdn: $fqdn, zone_id: $zone_id}'

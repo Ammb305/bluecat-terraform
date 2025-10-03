@@ -1,8 +1,8 @@
 terraform {
   required_version = ">= 1.0"
   required_providers {
-    local = {
-      source  = "hashicorp/local"
+    external = {
+      source  = "hashicorp/external"
       version = "~> 2.0"
     }
     null = {
@@ -12,17 +12,12 @@ terraform {
   }
 }
 
-# IMPORTANT: TERRAFORM STATE NOTE
-# This resource uses a `triggers` map to pass variables to the `destroy`
-# provisioner. If you add or change variables in this map, you MUST run `terraform apply`
-# one time to update the resource in the Terraform state.
-#
-# If you see a "Missing map element" error during `terraform destroy`, it means
-# the state file is out of sync. Running `terraform apply` will fix this by
-# updating the state with the new trigger values.
-resource "null_resource" "dns_record_management" {
-  triggers = {
-    # All variables needed for create and destroy must be listed here.
+# Use external data source to execute script and capture output
+# This replaces the local file approach which fails in Azure DevOps ephemeral agents
+data "external" "dns_record" {
+  program = ["bash", "${path.module}/manage_record.sh"]
+
+  query = {
     api_url      = var.api_url
     username     = var.username
     password     = var.password
@@ -30,38 +25,41 @@ resource "null_resource" "dns_record_management" {
     record_type  = var.record_type
     record_name  = var.record_name
     record_value = var.record_value
-    ttl          = var.ttl
+    ttl          = tostring(var.ttl)
     api_version  = var.api_version
     api_path     = var.api_path
   }
+}
 
-  provisioner "local-exec" {
-    # Create/Update provisioner
-    command     = "${path.module}/manage_record.sh '${self.triggers.api_url}' '${self.triggers.username}' '${self.triggers.password}' '${self.triggers.zone}' '${self.triggers.record_type}' '${self.triggers.record_name}' '${self.triggers.record_value}' '${self.triggers.ttl}' '${path.module}' '${self.triggers.api_version}' '${self.triggers.api_path}'"
-    interpreter = ["bash", "-c"]
+# Null resource for destroy operation only
+# The record_id from external data is included in triggers to ensure proper lifecycle
+resource "null_resource" "dns_record_destroy" {
+  triggers = {
+    # Variables needed for destroy
+    api_url      = var.api_url
+    username     = var.username
+    password     = var.password
+    zone         = var.zone
+    record_type  = var.record_type
+    record_name  = var.record_name
+    api_version  = var.api_version
+    api_path     = var.api_path
+    
+    record_id    = data.external.dns_record.result.record_id
   }
 
   provisioner "local-exec" {
-    # Destroy provisioner
     when        = destroy
     command     = "${path.module}/delete_record.sh '${self.triggers.api_url}' '${self.triggers.username}' '${self.triggers.password}' '${self.triggers.zone}' '${self.triggers.record_type}' '${self.triggers.record_name}' '${path.module}' '${self.triggers.api_version}' '${self.triggers.api_path}'"
     interpreter = ["bash", "-c"]
   }
 }
 
-# Read the operation results
-data "local_file" "record_id" {
-  filename   = "${path.module}/.terraform_record_id"
-  depends_on = [null_resource.dns_record_management]
-}
-
-data "local_file" "operation_status" {
-  filename   = "${path.module}/.terraform_operation_status"
-  depends_on = [null_resource.dns_record_management]
-}
-
-# Local values for outputs
+# Local values for outputs - data comes directly from external data source result
+# No local files needed - all data is in Terraform state
 locals {
-  record_id        = try(trimspace(data.local_file.record_id.content), "")
-  operation_status = try(trimspace(data.local_file.operation_status.content), "unknown")
+  record_id        = data.external.dns_record.result.record_id
+  operation_status = data.external.dns_record.result.operation_status
+  fqdn             = data.external.dns_record.result.fqdn
+  zone_id          = data.external.dns_record.result.zone_id
 }
