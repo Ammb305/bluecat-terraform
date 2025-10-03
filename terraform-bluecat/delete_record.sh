@@ -1,5 +1,6 @@
 #!/bin/bash
 # BlueCat DNS Record Deletion Script - REST API v2
+# Version 3: No jq dependency
 
 set -e
 
@@ -32,15 +33,11 @@ auth_response=$(curl -s -X POST "$BASE_API_URL/sessions" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}")
 
-# Extract token
+# Extract token (no jq needed)
 token=$(echo "$auth_response" | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
 if [ -z "$token" ]; then
     token=$(echo "$auth_response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-fi
-
-if [ -z "$token" ]; then
-    token=$(echo "$auth_response" | jq -r '.token' 2>/dev/null || echo "")
 fi
 
 if [ -z "$token" ] || [ "$token" = "null" ]; then
@@ -59,10 +56,6 @@ zone_id=$(echo "$zone_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' 
 
 if [ -z "$zone_id" ]; then
     zone_id=$(echo "$zone_response" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
-fi
-
-if [ -z "$zone_id" ]; then
-    zone_id=$(echo "$zone_response" | jq -r '.[0].id' 2>/dev/null || echo "")
 fi
 
 if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then

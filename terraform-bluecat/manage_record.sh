@@ -1,10 +1,23 @@
 #!/bin/bash
 # BlueCat DNS Record Management Script - REST API v2
+# Version 3: No jq dependency
 
 set -e
 
 # Read JSON input from stdin (for external data source)
-eval "$(jq -r '@sh "API_URL=\(.api_url) USERNAME=\(.username) PASSWORD=\(.password) ZONE=\(.zone) RECORD_TYPE=\(.record_type) RECORD_NAME=\(.record_name) RECORD_VALUE=\(.record_value) TTL=\(.ttl) API_VERSION=\(.api_version) API_PATH=\(.api_path)"')"
+input=$(cat)
+
+# Extract values from JSON input without jq - using grep and sed
+API_URL=$(echo "$input" | grep -o '"api_url":"[^"]*"' | sed 's/"api_url":"\(.*\)"/\1/')
+USERNAME=$(echo "$input" | grep -o '"username":"[^"]*"' | sed 's/"username":"\(.*\)"/\1/')
+PASSWORD=$(echo "$input" | grep -o '"password":"[^"]*"' | sed 's/"password":"\(.*\)"/\1/')
+ZONE=$(echo "$input" | grep -o '"zone":"[^"]*"' | sed 's/"zone":"\(.*\)"/\1/')
+RECORD_TYPE=$(echo "$input" | grep -o '"record_type":"[^"]*"' | sed 's/"record_type":"\(.*\)"/\1/')
+RECORD_NAME=$(echo "$input" | grep -o '"record_name":"[^"]*"' | sed 's/"record_name":"\(.*\)"/\1/')
+RECORD_VALUE=$(echo "$input" | grep -o '"record_value":"[^"]*"' | sed 's/"record_value":"\(.*\)"/\1/')
+TTL=$(echo "$input" | grep -o '"ttl":"[^"]*"' | sed 's/"ttl":"\(.*\)"/\1/')
+API_VERSION=$(echo "$input" | grep -o '"api_version":"[^"]*"' | sed 's/"api_version":"\(.*\)"/\1/')
+API_PATH=$(echo "$input" | grep -o '"api_path":"[^"]*"' | sed 's/"api_path":"\(.*\)"/\1/')
 
 # Construct the full API base URL
 if [ -n "$API_PATH" ]; then
@@ -25,15 +38,11 @@ auth_response=$(curl -s -X POST "$BASE_API_URL/sessions" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}")
 
-# Extract token from JSON response with multiple methods
+# Extract token from JSON response (no jq needed)
 token=$(echo "$auth_response" | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
 if [ -z "$token" ]; then
     token=$(echo "$auth_response" | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-fi
-
-if [ -z "$token" ]; then
-    token=$(echo "$auth_response" | jq -r '.token' 2>/dev/null || echo "")
 fi
 
 if [ -z "$token" ] || [ "$token" = "null" ]; then
@@ -53,10 +62,6 @@ zone_id=$(echo "$zone_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' 
 
 if [ -z "$zone_id" ]; then
     zone_id=$(echo "$zone_response" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
-fi
-
-if [ -z "$zone_id" ]; then
-    zone_id=$(echo "$zone_response" | jq -r '.[0].id' 2>/dev/null || echo "")
 fi
 
 if [ -z "$zone_id" ] || [ "$zone_id" = "null" ]; then
@@ -129,10 +134,6 @@ else
             new_id=$(echo "$create_body" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' | head -1)
         fi
         
-        if [ -z "$new_id" ]; then
-            new_id=$(echo "$create_body" | jq -r '.id' 2>/dev/null || echo "")
-        fi
-        
         echo "Record created with ID: $new_id" >&2
         operation_status="created"
         final_record_id="$new_id"
@@ -147,11 +148,7 @@ fi
 curl -s -X DELETE "$BASE_API_URL/sessions/$token" -H "$auth_header" > /dev/null 2>&1
 echo "Completed successfully" >&2
 
-# Output JSON result to stdout for Terraform to capture
+# Output JSON result to stdout for Terraform to capture (no jq needed)
 # This is the ONLY output to stdout - everything else goes to stderr
-jq -n \
-    --arg record_id "$final_record_id" \
-    --arg operation_status "$operation_status" \
-    --arg fqdn "$FQDN" \
-    --arg zone_id "$zone_id" \
-    '{record_id: $record_id, operation_status: $operation_status, fqdn: $fqdn, zone_id: $zone_id}'
+printf '{"record_id":"%s","operation_status":"%s","fqdn":"%s","zone_id":"%s"}\n' \
+    "$final_record_id" "$operation_status" "$FQDN" "$zone_id"
