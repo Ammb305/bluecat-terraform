@@ -51,18 +51,18 @@ output "test_results" {
   value = {
     cname_record = {
       id     = module.test_cname_record.record_id
-      status = module.test_cname_record.status
-      fqdn   = module.test_cname_record.record_fqdn
+      status = module.test_cname_record.operation_status
+      fqdn   = module.test_cname_record.fqdn
     }
     a_record = {
       id     = module.test_a_record.record_id
-      status = module.test_a_record.status
-      fqdn   = module.test_a_record.record_fqdn
+      status = module.test_a_record.operation_status
+      fqdn   = module.test_a_record.fqdn
     }
     txt_record = {
       id     = module.test_txt_record.record_id
-      status = module.test_txt_record.status
-      fqdn   = module.test_txt_record.record_fqdn
+      status = module.test_txt_record.operation_status
+      fqdn   = module.test_txt_record.fqdn
     }
   }
 }

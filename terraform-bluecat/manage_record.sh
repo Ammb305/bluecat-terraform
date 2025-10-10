@@ -1,6 +1,6 @@
 #!/bin/bash
 # BlueCat DNS Record Management Script - REST API v2
-# Version 3: No jq dependency
+# Version 4: With Deployment Support
 
 set -e
 
@@ -18,6 +18,12 @@ RECORD_VALUE=$(echo "$input" | grep -o '"record_value":"[^"]*"' | sed 's/"record
 TTL=$(echo "$input" | grep -o '"ttl":"[^"]*"' | sed 's/"ttl":"\(.*\)"/\1/')
 API_VERSION=$(echo "$input" | grep -o '"api_version":"[^"]*"' | sed 's/"api_version":"\(.*\)"/\1/')
 API_PATH=$(echo "$input" | grep -o '"api_path":"[^"]*"' | sed 's/"api_path":"\(.*\)"/\1/')
+
+# Optional: DNS Server ID for deployment (if empty, will auto-discover)
+DNS_SERVER_ID=$(echo "$input" | grep -o '"dns_server_id":"[^"]*"' | sed 's/"dns_server_id":"\(.*\)"/\1/' || echo "")
+
+# Auto-deploy flag
+AUTO_DEPLOY=$(echo "$input" | grep -o '"auto_deploy":"[^"]*"' | sed 's/"auto_deploy":"\(.*\)"/\1/' || echo "true")
 
 # Construct the full API base URL
 if [ -n "$API_PATH" ]; then
@@ -144,11 +150,142 @@ else
     fi
 fi
 
+# --- Deploy Changes ---
+deployment_status="not_deployed"
+deployed_servers=""
+
+if [ "$AUTO_DEPLOY" = "true" ] || [ "$AUTO_DEPLOY" = "1" ]; then
+    echo "============================================" >&2
+    echo "Deploying changes to DNS servers..." >&2
+    echo "============================================" >&2
+
+if [ -n "$DNS_SERVER_ID" ]; then
+    # Deploy to specific server if provided
+    echo "Deploying to specified DNS server ID: $DNS_SERVER_ID" >&2
+    
+    deploy_result=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+        -X POST "$BASE_API_URL/servers/$DNS_SERVER_ID/services/DNS/deploy" \
+        -H "$auth_header" \
+        -H "Content-Type: application/json")
+    
+    http_code=$(echo "$deploy_result" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
+    deploy_body=$(echo "$deploy_result" | sed '/HTTP_CODE:/d')
+    
+    echo "Deployment HTTP Code: $http_code" >&2
+    echo "Deployment Response: $deploy_body" >&2
+    
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ] || [ "$http_code" = "204" ]; then
+        echo "✓ Successfully deployed to server $DNS_SERVER_ID" >&2
+        deployment_status="deployed"
+        deployed_servers="$DNS_SERVER_ID"
+    else
+        echo "✗ Deployment failed. HTTP Code: $http_code" >&2
+        echo "Response: $deploy_body" >&2
+    fi
+else
+    # Auto-discover deployment servers for this zone
+    echo "Auto-discovering DNS servers for zone..." >&2
+    
+    # Try multiple API endpoints for getting deployment info
+    deploy_response=$(curl -s -X GET "$BASE_API_URL/zones/$zone_id/deploymentRoles" -H "$auth_header")
+    echo "DeploymentRoles response: $deploy_response" >&2
+    
+    # Extract all server IDs - try multiple patterns
+    server_ids=$(echo "$deploy_response" | grep -o '"serverId"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*:\([0-9]*\)/\1/')
+    
+    # Alternative: Try getting all servers and deploy to all
+    if [ -z "$server_ids" ]; then
+        echo "Trying alternative: Get all servers..." >&2
+        servers_response=$(curl -s -X GET "$BASE_API_URL/servers?type=DNS" -H "$auth_header")
+        echo "Servers response: $servers_response" >&2
+        server_ids=$(echo "$servers_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*:\([0-9]*\)/\1/')
+    fi
+    
+    # Alternative: Try deployment options endpoint
+    if [ -z "$server_ids" ]; then
+        echo "Trying alternative: Get deployment options..." >&2
+        options_response=$(curl -s -X GET "$BASE_API_URL/zones/$zone_id/deploymentOptions" -H "$auth_header")
+        echo "Deployment options response: $options_response" >&2
+        server_ids=$(echo "$options_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*:\([0-9]*\)/\1/')
+    fi
+    
+    if [ -z "$server_ids" ]; then
+        echo "⚠ Warning: No deployment servers found for zone" >&2
+        echo "API Response: $deploy_response" >&2
+        echo "Record was created but NOT deployed" >&2
+        echo "Please check BlueCat documentation or specify dns_server_id manually" >&2
+    else
+        echo "Found servers to deploy to: $server_ids" >&2
+        
+        # Deploy to each server
+        for server_id in $server_ids; do
+            echo "Deploying to server ID: $server_id" >&2
+            
+            # Try the standard deployment endpoint
+            deploy_result=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+                -X POST "$BASE_API_URL/servers/$server_id/services/DNS/deploy" \
+                -H "$auth_header" \
+                -H "Content-Type: application/json")
+            
+            http_code=$(echo "$deploy_result" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
+            deploy_body=$(echo "$deploy_result" | sed '/HTTP_CODE:/d')
+            
+            echo "Server $server_id - HTTP Code: $http_code" >&2
+            echo "Server $server_id - Response: $deploy_body" >&2
+            
+            if [ "$http_code" = "200" ] || [ "$http_code" = "201" ] || [ "$http_code" = "204" ]; then
+                echo "✓ Successfully deployed to server $server_id" >&2
+                deployment_status="deployed"
+                if [ -z "$deployed_servers" ]; then
+                    deployed_servers="$server_id"
+                else
+                    deployed_servers="$deployed_servers,$server_id"
+                fi
+            else
+                echo "✗ Deployment to server $server_id failed. HTTP Code: $http_code" >&2
+                
+                # Try alternative deployment endpoint
+                echo "Trying alternative deployment endpoint..." >&2
+                alt_deploy=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
+                    -X POST "$BASE_API_URL/deployments" \
+                    -H "$auth_header" \
+                    -H "Content-Type: application/json" \
+                    -d "{\"serverId\":$server_id,\"entityId\":$zone_id}")
+                
+                alt_code=$(echo "$alt_deploy" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
+                alt_body=$(echo "$alt_deploy" | sed '/HTTP_CODE:/d')
+                
+                echo "Alternative endpoint - HTTP Code: $alt_code" >&2
+                echo "Alternative endpoint - Response: $alt_body" >&2
+                
+                if [ "$alt_code" = "200" ] || [ "$alt_code" = "201" ] || [ "$alt_code" = "204" ]; then
+                    echo "✓ Successfully deployed via alternative endpoint" >&2
+                    deployment_status="deployed"
+                    if [ -z "$deployed_servers" ]; then
+                        deployed_servers="$server_id"
+                    else
+                        deployed_servers="$deployed_servers,$server_id"
+                    fi
+                fi
+            fi
+        done
+    fi
+fi
+else
+    echo "============================================" >&2
+    echo "Auto-deployment disabled - skipping deployment" >&2
+    echo "============================================" >&2
+fi
+
+echo "============================================" >&2
+echo "Deployment phase completed: $deployment_status" >&2
+echo "============================================" >&2
+
 # --- Logout ---
 curl -s -X DELETE "$BASE_API_URL/sessions/$token" -H "$auth_header" > /dev/null 2>&1
 echo "Completed successfully" >&2
 
 # Output JSON result to stdout for Terraform to capture (no jq needed)
 # This is the ONLY output to stdout - everything else goes to stderr
-printf '{"record_id":"%s","operation_status":"%s","fqdn":"%s","zone_id":"%s"}\n' \
-    "$final_record_id" "$operation_status" "$FQDN" "$zone_id"
+printf '{"record_id":"%s","operation_status":"%s","fqdn":"%s","zone_id":"%s","deployment_status":"%s","deployed_servers":"%s"}\n' \
+    "$final_record_id" "$operation_status" "$FQDN" "$zone_id" "$deployment_status" "$deployed_servers"

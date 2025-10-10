@@ -23,9 +23,9 @@ output "record_id" {
 }
 
 output "status" {
-  value = module.test_cname.status
+  value = module.test_cname.operation_status
 }
 
 output "record_fqdn" {
-  value = module.test_cname.record_fqdn
+  value = module.test_cname.fqdn
 }

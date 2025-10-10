@@ -1,82 +1,71 @@
-# Variables for BlueCat DNS Record Management Module
-
 variable "api_url" {
-  description = "Base API endpoint for BlueCat server"
+  description = "BlueCat API URL"
   type        = string
-  validation {
-    condition     = can(regex("^https?://", var.api_url))
-    error_message = "The api_url must be a valid HTTP or HTTPS URL."
-  }
 }
 
 variable "username" {
-  description = "Username for BlueCat authentication"
+  description = "BlueCat username"
   type        = string
   sensitive   = true
 }
 
 variable "password" {
-  description = "Password for BlueCat authentication"
+  description = "BlueCat password"
   type        = string
   sensitive   = true
 }
 
-variable "api_version" {
-  description = "BlueCat API version (v1 or v2)"
-  type        = string
-  default     = "v2"
-  validation {
-    condition     = contains(["v1", "v2"], var.api_version)
-    error_message = "API version must be either 'v1' or 'v2'."
-  }
-}
-
-variable "api_path" {
-  description = "Custom API path (overrides default version-based path). Use for custom endpoints like '/api/v2'"
-  type        = string
-  default     = "/api/v2"
-}
-
 variable "zone" {
-  description = "Domain zone for DNS records (e.g., example.com)"
+  description = "DNS zone name"
   type        = string
-  validation {
-    condition     = can(regex("^[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", var.zone))
-    error_message = "The zone must be a valid domain name."
-  }
 }
 
 variable "record_type" {
-  description = "Type of DNS record to manage (CNAME or TXT)"
+  description = "DNS record type (A, AAAA, CNAME, TXT)"
   type        = string
+  
   validation {
-    condition     = contains(["CNAME", "TXT", "A"], var.record_type)
-    error_message = "Record type must be either CNAME, TXT, or A."
+    condition     = contains(["A", "AAAA", "CNAME", "TXT"], var.record_type)
+    error_message = "Record type must be one of: A, AAAA, CNAME, TXT"
   }
 }
 
 variable "record_name" {
-  description = "Name of the DNS record"
+  description = "DNS record name (without zone)"
   type        = string
 }
 
 variable "record_value" {
-  description = "Value of the DNS record"
+  description = "DNS record value (IP address, hostname, or text)"
   type        = string
 }
 
 variable "ttl" {
-  description = "Time to live for the DNS record in seconds"
+  description = "Time to live in seconds"
   type        = number
-  default     = 3600
-  validation {
-    condition     = var.ttl >= 300 && var.ttl <= 86400
-    error_message = "TTL must be between 300 and 86400 seconds."
-  }
+  default     = 300
 }
 
-variable "timeout" {
-  description = "Timeout for API requests in seconds"
-  type        = number
-  default     = 30
+variable "api_version" {
+  description = "BlueCat API version"
+  type        = string
+  default     = "v2"
+}
+
+variable "api_path" {
+  description = "BlueCat API path"
+  type        = string
+  default     = "/api/v2"
+}
+
+variable "dns_server_id" {
+  description = "Optional: Specific DNS Server ID to deploy to. If not specified, auto-discovers servers from zone"
+  type        = string
+  default     = ""
+}
+
+variable "auto_deploy" {
+  description = "Whether to automatically deploy DNS changes to servers after record creation/deletion"
+  type        = bool
+  default     = true
 }

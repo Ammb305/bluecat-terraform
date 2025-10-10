@@ -17,9 +17,10 @@ app = Flask(__name__)
 # In-memory storage for testing
 tokens = {}
 zones = {
-    "queue.core.windows.net": {"id": 100001, "name": "queue.core.windows.net"},
-    "privatelink.queue.core.windows.net": {"id": 100002, "name": "privatelink.queue.core.windows.net"},
-    "example.com": {"id": 100003, "name": "example.com"}
+    "queue.core.windows.net": {"id": 100001, "name": "queue.core.windows.net", "view": "internal"},
+    "queue.core.windows.net_external": {"id": 100004, "name": "queue.core.windows.net", "view": "external"},
+    "privatelink.queue.core.windows.net": {"id": 100002, "name": "privatelink.queue.core.windows.net", "view": "internal"}, 
+    "example.com": {"id": 100003, "name": "example.com", "view": "default"}
 }
 records = {}
 record_counter = 200000
@@ -318,18 +319,28 @@ def login_v2():
 def get_zones_v2():
     """Get zones by name filter (v2 API)"""
     zone_name = request.args.get('name', '')
+    view_filter = request.args.get('view', '')
     
     if zone_name:
         # Return specific zone by exact name match
+        matching_zones = []
         for zname, zdata in zones.items():
             if zname == zone_name:
-                return jsonify([{
+                zone_view = zdata.get('view', 'default')
+                
+                # If view filter is specified, only return zones matching that view
+                if view_filter and zone_view != view_filter:
+                    continue
+                    
+                matching_zones.append({
                     "id": zdata['id'],
                     "name": zname,
                     "type": zdata.get('type', 'Zone'),
+                    "view": zone_view,
                     "properties": zdata.get('properties', '')
-                }])
-        return jsonify([])  # Zone not found
+                })
+        
+        return jsonify(matching_zones)
     else:
         # Return all zones
         zone_list = []
@@ -728,6 +739,137 @@ def debug_records():
         "zones": zones
     })
 
+# Deployment endpoints for v2 API
+@app.route('/api/v2/zones/<int:zone_id>/deploymentRoles', methods=['GET'])
+@require_auth
+def get_zone_deployment_roles(zone_id):
+    """Get deployment roles for a zone (v2 API)"""
+    # Find zone by ID
+    zone_found = False
+    for zname, zdata in zones.items():
+        if zdata['id'] == zone_id:
+            zone_found = True
+            break
+    
+    if not zone_found:
+        return jsonify({"error": "Zone not found"}), 404
+    
+    return jsonify([
+        {
+            "id": 100001,
+            "name": "Primary DNS Server",
+            "type": "MASTER",
+            "server": {
+                "id": 200001,
+                "name": "dns-server-01.example.com",
+                "ip": "192.168.1.10"
+            }
+        },
+        {
+            "id": 100002,
+            "name": "Secondary DNS Server",
+            "type": "SLAVE", 
+            "server": {
+                "id": 200002,
+                "name": "dns-server-02.example.com",
+                "ip": "192.168.1.11"
+            }
+        }
+    ]), 200
+
+@app.route('/api/v2/servers', methods=['GET'])
+@require_auth
+def get_servers_v2():
+    """Get servers with optional type filtering (v2 API)"""
+    server_type = request.args.get('type', '').upper()
+    
+    all_servers = [
+        {
+            "id": 200001,
+            "name": "dns-server-01.example.com",
+            "type": "DNS",
+            "ip": "192.168.1.10",
+            "status": "active",
+            "services": ["DNS"]
+        },
+        {
+            "id": 200002,
+            "name": "dns-server-02.example.com", 
+            "type": "DNS",
+            "ip": "192.168.1.11",
+            "status": "active",
+            "services": ["DNS"]
+        },
+        {
+            "id": 200003,
+            "name": "dhcp-server-01.example.com",
+            "type": "DHCP",
+            "ip": "192.168.1.20",
+            "status": "active", 
+            "services": ["DHCP"]
+        }
+    ]
+    
+    if server_type:
+        filtered_servers = [s for s in all_servers if s['type'] == server_type]
+        return jsonify(filtered_servers), 200
+    
+    return jsonify(all_servers), 200
+
+@app.route('/api/v2/deployment/options', methods=['GET'])
+@require_auth
+def get_deployment_options():
+    """Get deployment options (v2 API)"""
+    return jsonify({
+        "deploymentModes": ["immediate", "scheduled"],
+        "notificationOptions": ["email", "snmp"],
+        "rollbackEnabled": True,
+        "maxConcurrentDeployments": 5
+    }), 200
+
+@app.route('/api/v2/servers/<int:server_id>/services/DNS/deploy', methods=['POST'])
+@require_auth
+def deploy_dns_service(server_id):
+    """Deploy DNS service to a specific server (v2 API)"""
+    # Check if server exists
+    server_found = False
+    server_name = None
+    
+    # Mock server data
+    servers = [
+        {"id": 200001, "name": "dns-server-01.example.com"},
+        {"id": 200002, "name": "dns-server-02.example.com"},
+        {"id": 200003, "name": "dhcp-server-01.example.com"}
+    ]
+    
+    for server in servers:
+        if server['id'] == server_id:
+            server_found = True
+            server_name = server['name']
+            break
+    
+    if not server_found:
+        return jsonify({"error": "Server not found"}), 404
+    
+    # Handle both JSON and empty body deployments
+    deployment_data = {}
+    try:
+        deployment_data = request.get_json() or {}
+    except Exception:
+        # If JSON parsing fails, treat as empty deployment request
+        deployment_data = {}
+    
+    return jsonify({
+        "deploymentId": str(uuid.uuid4()),
+        "serverId": server_id,
+        "serverName": server_name,
+        "service": "DNS",
+        "status": "completed",
+        "message": f"DNS service deployed successfully to {server_name}",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "options": deployment_data
+    }), 200
+
 if __name__ == '__main__':
     print("Starting BlueCat Mock Server...")
     print("Available endpoints:")
@@ -748,6 +890,11 @@ if __name__ == '__main__':
     print("  PUT  /api/v2/records/<record_id>")
     print("  DELETE /api/v2/records/<record_id>")
     print("  POST /api/v2/zones/<zone_id>/deploy")
+    print("\n--- V2 Deployment Endpoints ---")
+    print("  GET  /api/v2/zones/<zone_id>/deploymentRoles")
+    print("  GET  /api/v2/servers?type=DNS")
+    print("  GET  /api/v2/deployment/options")
+    print("  POST /api/v2/servers/<server_id>/services/DNS/deploy")
     print("\n--- Services/REST/v2 Endpoints (Aliases) ---")
     print("  POST /Services/REST/v2/sessions")
     print("  DELETE /Services/REST/v2/sessions/<token>")
