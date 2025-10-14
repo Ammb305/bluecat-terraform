@@ -701,20 +701,52 @@ def deployments_v2():
     try:
         data = request.get_json()
         
+        # Validate required fields as per BlueCat v2 API
+        if 'type' not in data:
+            return jsonify({
+                "status": 400,
+                "reason": "Bad Request", 
+                "code": "UnsupportedResourceFieldValue",
+                "message": "The value for field 'type' is not supported for the given resource or collection type"
+            }), 400
+        if 'service' not in data:
+            return jsonify({"error": "service is required"}), 400
         if 'serverId' not in data:
             return jsonify({"error": "serverId is required"}), 400
         if 'entityId' not in data:
             return jsonify({"error": "entityId is required"}), 400
         
+        deployment_type = data['type']
+        service = data['service']
         server_id = data['serverId']
         entity_id = data['entityId']
         
-        print(f"Mock deployment: Server {server_id}, Entity {entity_id}")
+        # Validate deployment type (prioritize FullDeployment as it's more widely supported)
+        if deployment_type not in ['DifferentialDeployment', 'FullDeployment']:
+            return jsonify({
+                "status": 400,
+                "reason": "Bad Request", 
+                "code": "UnsupportedResourceFieldValue",
+                "message": "The value for field 'type' is not supported for the given resource or collection type"
+            }), 400
+        
+        # Simulate some environments not supporting DifferentialDeployment
+        if deployment_type == 'DifferentialDeployment':
+            return jsonify({
+                "status": 400,
+                "reason": "Bad Request", 
+                "code": "UnsupportedResourceFieldValue",
+                "message": "The value for field 'type' is not supported for the given resource or collection type"
+            }), 400
+        
+        print(f"Mock deployment: Type={deployment_type}, Service={service}, Server={server_id}, Entity={entity_id}")
         
         # Simulate deployment success
         return jsonify({
-            "message": f"Successfully deployed entity {entity_id} to server {server_id}",
+            "message": f"Successfully deployed {deployment_type} for {service} service on entity {entity_id} to server {server_id}",
             "deploymentId": str(uuid.uuid4()),
+            "type": deployment_type,
+            "service": service,
             "serverId": server_id,
             "entityId": entity_id,
             "status": "completed"

@@ -181,7 +181,7 @@ if [ "$AUTO_DEPLOY" = "true" ] || [ "$AUTO_DEPLOY" = "1" ]; then
                 -X POST "$deploy_url" \
                 -H "$auth_header" \
                 -H "Content-Type: application/json" \
-                -d "{\"serverId\":$server_id,\"entityId\":$zone_id}")
+                -d "{\"type\":\"FullDeployment\",\"service\":\"DNS\",\"serverId\":$server_id,\"entityId\":$zone_id}")
             
             http_code=$(echo "$deploy_response" | grep -o "HTTPSTATUS:[0-9]*" | grep -o "[0-9]*")
             response_body=$(echo "$deploy_response" | sed 's/HTTPSTATUS:[0-9]*$//')

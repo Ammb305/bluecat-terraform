@@ -170,7 +170,7 @@ if [ -n "$DNS_SERVER_ID" ]; then
         -X POST "$deploy_url" \
         -H "$auth_header" \
         -H "Content-Type: application/json" \
-        -d "{\"serverId\":$DNS_SERVER_ID,\"entityId\":$zone_id}")
+        -d "{\"type\":\"FullDeployment\",\"service\":\"DNS\",\"serverId\":$DNS_SERVER_ID,\"entityId\":$zone_id}")
     
     http_code=$(echo "$deploy_result" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
     deploy_body=$(echo "$deploy_result" | sed '/HTTP_CODE:/d')
@@ -237,7 +237,7 @@ else
                 -X POST "$BASE_API_URL/deployments" \
                 -H "$auth_header" \
                 -H "Content-Type: application/json" \
-                -d "{\"serverId\":$server_id,\"entityId\":$zone_id}")
+                -d "{\"type\":\"FullDeployment\",\"service\":\"DNS\",\"serverId\":$server_id,\"entityId\":$zone_id}")
             
             http_code=$(echo "$deploy_result" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
             deploy_body=$(echo "$deploy_result" | sed '/HTTP_CODE:/d')
