@@ -105,8 +105,10 @@ echo "Zone ID: $zone_id"
 # --- Find record to delete ---
 echo "Finding record to delete..."
 record_response=$(curl -s -X GET "$BASE_API_URL/records?zone=$zone_id&name=$FQDN&type=$RECORD_TYPE" -H "$auth_header")
+echo "DEBUG DELETE: Record search response: $record_response" >&2
 
-record_id=$(echo "$record_response" | grep -o '"id":[0-9]*' | head -1 | sed 's/"id"://')
+record_id=$(echo "$record_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | head -1 | sed 's/.*:[[:space:]]*\([0-9]*\).*/\1/')
+echo "DEBUG DELETE: Extracted record ID: $record_id" >&2
 
 if [ -z "$record_id" ]; then
     echo "Record not found: $FQDN ($RECORD_TYPE)"
@@ -143,7 +145,10 @@ if [ "$AUTO_DEPLOY" = "true" ] || [ "$AUTO_DEPLOY" = "1" ]; then
     
     # Get deployment roles for the zone
     echo "Auto-discovering DNS servers for zone..." >&2
-    roles_response=$(curl -s -X GET "$BASE_API_URL/zones/$zone_id/deploymentRoles" -H "$auth_header")
+    roles_url="$BASE_API_URL/zones/$zone_id/deploymentRoles"
+    echo "DEBUG DELETE: Getting deployment roles from URL: $roles_url" >&2
+    
+    roles_response=$(curl -s -X GET "$roles_url" -H "$auth_header")
     
     echo "DeploymentRoles response: $roles_response" >&2
     
@@ -153,7 +158,10 @@ if [ "$AUTO_DEPLOY" = "true" ] || [ "$AUTO_DEPLOY" = "1" ]; then
     # If deployment roles didn't work, try getting all DNS servers
     if [ -z "$server_ids" ]; then
         echo "Trying alternative: Get all DNS servers..." >&2
-        servers_response=$(curl -s -X GET "$BASE_API_URL/servers?type=DNS" -H "$auth_header")
+        servers_url="$BASE_API_URL/servers?type=DNS"
+        echo "DEBUG DELETE: Getting DNS servers from URL: $servers_url" >&2
+        
+        servers_response=$(curl -s -X GET "$servers_url" -H "$auth_header")
         echo "Servers response (first 500 chars): $(echo "$servers_response" | head -c 500)" >&2
         
         server_ids=$(echo "$servers_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | grep -o '[0-9]*' | head -10)
@@ -166,11 +174,14 @@ if [ "$AUTO_DEPLOY" = "true" ] || [ "$AUTO_DEPLOY" = "1" ]; then
         for server_id in $server_ids; do
             echo "Attempting deployment to server ID: $server_id" >&2
             
+            deploy_url="$BASE_API_URL/deployments"
+            echo "DEBUG DELETE: Deploying to URL: $deploy_url using v2 API" >&2
+            
             deploy_response=$(curl -s -w "HTTPSTATUS:%{http_code}" \
-                -X POST "$BASE_API_URL/servers/$server_id/services/DNS/deploy" \
+                -X POST "$deploy_url" \
                 -H "$auth_header" \
                 -H "Content-Type: application/json" \
-                -d '{}')
+                -d "{\"serverId\":$server_id,\"entityId\":$zone_id}")
             
             http_code=$(echo "$deploy_response" | grep -o "HTTPSTATUS:[0-9]*" | grep -o "[0-9]*")
             response_body=$(echo "$deploy_response" | sed 's/HTTPSTATUS:[0-9]*$//')

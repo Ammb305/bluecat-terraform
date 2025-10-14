@@ -161,12 +161,16 @@ if [ "$AUTO_DEPLOY" = "true" ] || [ "$AUTO_DEPLOY" = "1" ]; then
 
 if [ -n "$DNS_SERVER_ID" ]; then
     # Deploy to specific server if provided
-    echo "Deploying to specified DNS server ID: $DNS_SERVER_ID" >&2
+    echo "Deploying to specified DNS server ID: $DNS_SERVER_ID using v2 API..." >&2
+    
+    deploy_url="$BASE_API_URL/deployments"
+    echo "DEBUG: Deploying to URL: $deploy_url" >&2
     
     deploy_result=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
-        -X POST "$BASE_API_URL/servers/$DNS_SERVER_ID/services/DNS/deploy" \
+        -X POST "$deploy_url" \
         -H "$auth_header" \
-        -H "Content-Type: application/json")
+        -H "Content-Type: application/json" \
+        -d "{\"serverId\":$DNS_SERVER_ID,\"entityId\":$zone_id}")
     
     http_code=$(echo "$deploy_result" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
     deploy_body=$(echo "$deploy_result" | sed '/HTTP_CODE:/d')
@@ -187,7 +191,10 @@ else
     echo "Auto-discovering DNS servers for zone..." >&2
     
     # Try multiple API endpoints for getting deployment info
-    deploy_response=$(curl -s -X GET "$BASE_API_URL/zones/$zone_id/deploymentRoles" -H "$auth_header")
+    roles_url="$BASE_API_URL/zones/$zone_id/deploymentRoles"
+    echo "DEBUG: Getting deployment roles from URL: $roles_url" >&2
+    
+    deploy_response=$(curl -s -X GET "$roles_url" -H "$auth_header")
     echo "DeploymentRoles response: $deploy_response" >&2
     
     # Extract all server IDs - try multiple patterns
@@ -196,7 +203,10 @@ else
     # Alternative: Try getting all servers and deploy to all
     if [ -z "$server_ids" ]; then
         echo "Trying alternative: Get all servers..." >&2
-        servers_response=$(curl -s -X GET "$BASE_API_URL/servers?type=DNS" -H "$auth_header")
+        servers_url="$BASE_API_URL/servers?type=DNS"
+        echo "DEBUG: Getting DNS servers from URL: $servers_url" >&2
+        
+        servers_response=$(curl -s -X GET "$servers_url" -H "$auth_header")
         echo "Servers response: $servers_response" >&2
         server_ids=$(echo "$servers_response" | grep -o '"id"[[:space:]]*:[[:space:]]*[0-9]*' | sed 's/.*:\([0-9]*\)/\1/')
     fi
@@ -221,11 +231,13 @@ else
         for server_id in $server_ids; do
             echo "Deploying to server ID: $server_id" >&2
             
-            # Try the standard deployment endpoint
+            # Use v2 deployment endpoint
+            echo "Deploying to server $server_id using v2 API..." >&2
             deploy_result=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
-                -X POST "$BASE_API_URL/servers/$server_id/services/DNS/deploy" \
+                -X POST "$BASE_API_URL/deployments" \
                 -H "$auth_header" \
-                -H "Content-Type: application/json")
+                -H "Content-Type: application/json" \
+                -d "{\"serverId\":$server_id,\"entityId\":$zone_id}")
             
             http_code=$(echo "$deploy_result" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
             deploy_body=$(echo "$deploy_result" | sed '/HTTP_CODE:/d')
@@ -243,30 +255,7 @@ else
                 fi
             else
                 echo "✗ Deployment to server $server_id failed. HTTP Code: $http_code" >&2
-                
-                # Try alternative deployment endpoint
-                echo "Trying alternative deployment endpoint..." >&2
-                alt_deploy=$(curl -s -w "\nHTTP_CODE:%{http_code}" \
-                    -X POST "$BASE_API_URL/deployments" \
-                    -H "$auth_header" \
-                    -H "Content-Type: application/json" \
-                    -d "{\"serverId\":$server_id,\"entityId\":$zone_id}")
-                
-                alt_code=$(echo "$alt_deploy" | grep "HTTP_CODE:" | sed 's/HTTP_CODE://')
-                alt_body=$(echo "$alt_deploy" | sed '/HTTP_CODE:/d')
-                
-                echo "Alternative endpoint - HTTP Code: $alt_code" >&2
-                echo "Alternative endpoint - Response: $alt_body" >&2
-                
-                if [ "$alt_code" = "200" ] || [ "$alt_code" = "201" ] || [ "$alt_code" = "204" ]; then
-                    echo "✓ Successfully deployed via alternative endpoint" >&2
-                    deployment_status="deployed"
-                    if [ -z "$deployed_servers" ]; then
-                        deployed_servers="$server_id"
-                    else
-                        deployed_servers="$deployed_servers,$server_id"
-                    fi
-                fi
+                echo "Response: $deploy_body" >&2
             fi
         done
     fi

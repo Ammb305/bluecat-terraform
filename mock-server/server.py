@@ -694,6 +694,35 @@ def quick_deploy_v2():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
+@app.route('/api/v2/deployments', methods=['POST'])
+@require_auth
+def deployments_v2():
+    """Proper v2 deployment endpoint"""
+    try:
+        data = request.get_json()
+        
+        if 'serverId' not in data:
+            return jsonify({"error": "serverId is required"}), 400
+        if 'entityId' not in data:
+            return jsonify({"error": "entityId is required"}), 400
+        
+        server_id = data['serverId']
+        entity_id = data['entityId']
+        
+        print(f"Mock deployment: Server {server_id}, Entity {entity_id}")
+        
+        # Simulate deployment success
+        return jsonify({
+            "message": f"Successfully deployed entity {entity_id} to server {server_id}",
+            "deploymentId": str(uuid.uuid4()),
+            "serverId": server_id,
+            "entityId": entity_id,
+            "status": "completed"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
 @app.route('/api/v2/sessions/<token>', methods=['DELETE'])
 @require_auth
 def delete_session_v2(token):
